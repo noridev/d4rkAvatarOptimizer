@@ -162,8 +162,9 @@ The amount of sample points can be changed in the `Motion Time Approximation Sam
 ## Disable Phys Bones When Unused
 Creates animation curves for all phys bone components that are used by only one SkinnedMeshRenderer. Those curves get added to the animations that animate the SkinnedMeshRenderer enabled or its game object active flag.
 ## MMD Compatibility
-When enabled the optimizer will keep the blend shapes that are used by MMD animations from getting removed or merged.  
-It also prevents `Optimize FX Layer` from deleting or merging layers 0, 1 & 2 as they are used by MMD worlds.
+When enabled the optimizer will prevent `Optimize FX Layer` from deleting or merging layers 0, 1 & 2 as they are used by MMD worlds.
+## Keep MMD Blend Shapes
+When enabled the optimizer will keep the blend shapes that are used by MMD animations from getting removed or merged.
 ## Delete Unused Components
 * Deletes all components that are turned off and never get enabled by animations.
 * Deletes all phys bones whose dependencies got deleted in the previous step.

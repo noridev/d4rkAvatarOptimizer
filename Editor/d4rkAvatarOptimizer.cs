@@ -52,6 +52,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour
         public bool DisablePhysBonesWhenUnused = true;
         public bool MergeSameRatioBlendShapes = true;
         public bool MMDCompatibility = true;
+        public bool KeepMMDBlendShapes = true;
         public bool DeleteUnusedComponents = true;
         public int DeleteUnusedGameObjects = 0;
         public bool UseRingFingerAsFootCollider = false;
@@ -230,6 +231,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour
         get { return MergeSameDimensionTextures && settings.MergeMainTex; }
         set { settings.MergeMainTex = value; } }
     public bool MMDCompatibility { get { return settings.MMDCompatibility; } set { settings.MMDCompatibility = value; } }
+    public bool KeepMMDBlendShapes { get { return settings.KeepMMDBlendShapes; } set { settings.KeepMMDBlendShapes = value; } }
     public bool DeleteUnusedComponents { get { return settings.DeleteUnusedComponents; } set { settings.DeleteUnusedComponents = value; } }
     public bool DeleteUnusedGameObjects { get { return settings.DeleteUnusedGameObjects != 0; } set { settings.DeleteUnusedGameObjects = value ? 1 : 0; } }
     public bool OptimizeFXLayer { get { return settings.OptimizeFXLayer; } set { settings.OptimizeFXLayer = value; } }
@@ -260,6 +262,8 @@ public class d4rkAvatarOptimizer : MonoBehaviour
                 return MergeSameDimensionTextures;
             case nameof(CombineApproximateMotionTimeAnimations):
                 return settings.OptimizeFXLayer;
+            case nameof(KeepMMDBlendShapes):
+                return settings.MMDCompatibility;
             #if !HAS_IEDITOR_ONLY
             case nameof(ApplyOnUpload):
                 return false;
@@ -282,6 +286,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour
         {nameof(MergeSameDimensionTextures), "Merge Same Dimension Textures"},
         {nameof(MergeMainTex), "Merge MainTex"},
         {nameof(MMDCompatibility), "MMD Compatibility"},
+        {nameof(KeepMMDBlendShapes), "Keep MMD Blend Shapes"},
         {nameof(DeleteUnusedComponents), "Delete Unused Components"},
         {nameof(DeleteUnusedGameObjects), "Delete Unused GameObjects"},
         {nameof(OptimizeFXLayer), "Optimize FX Layer"},
@@ -321,6 +326,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour
             {nameof(Settings.DisablePhysBonesWhenUnused), true},
             {nameof(Settings.MergeSameRatioBlendShapes), true},
             {nameof(Settings.MMDCompatibility), true},
+            {nameof(Settings.KeepMMDBlendShapes), true},
             {nameof(Settings.DeleteUnusedComponents), true},
             {nameof(Settings.DeleteUnusedGameObjects), 0},
         }),
@@ -341,6 +347,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour
             {nameof(Settings.DisablePhysBonesWhenUnused), true},
             {nameof(Settings.MergeSameRatioBlendShapes), true},
             {nameof(Settings.MMDCompatibility), true},
+            {nameof(Settings.KeepMMDBlendShapes), true},
             {nameof(Settings.DeleteUnusedComponents), true},
             {nameof(Settings.DeleteUnusedGameObjects), 0},
         }),
@@ -361,6 +368,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour
             {nameof(Settings.DisablePhysBonesWhenUnused), true},
             {nameof(Settings.MergeSameRatioBlendShapes), true},
             {nameof(Settings.MMDCompatibility), false},
+            {nameof(Settings.KeepMMDBlendShapes), false},
             {nameof(Settings.DeleteUnusedComponents), true},
             {nameof(Settings.DeleteUnusedGameObjects), 1},
         }),
@@ -2431,7 +2439,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour
             for (int i = 0; i < mesh.blendShapeCount; i++)
             {
                 var name = mesh.GetBlendShapeName(i);
-                if (MMDCompatibility && MMDBlendShapes.Contains(name))
+                if (KeepMMDBlendShapes && MMDBlendShapes.Contains(name))
                 {
                     usedBlendShapes.Add(path + name);
                     continue;
@@ -2486,7 +2494,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour
             for (int i = 0; i < mesh.blendShapeCount; i++)
             {
                 var name = mesh.GetBlendShapeName(i);
-                if (MMDCompatibility && MMDBlendShapes.Contains(name))
+                if (KeepMMDBlendShapes && MMDBlendShapes.Contains(name))
                     continue;
                 if (mesh.GetBlendShapeFrameCount(i) == 1)
                 {
