@@ -51,7 +51,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour
         public bool CombineApproximateMotionTimeAnimations = false;
         public bool DisablePhysBonesWhenUnused = true;
         public bool MergeSameRatioBlendShapes = true;
-        public bool KeepMMDBlendShapes = true;
+        public bool MMDCompatibility = true;
         public bool DeleteUnusedComponents = true;
         public int DeleteUnusedGameObjects = 0;
         public bool UseRingFingerAsFootCollider = false;
@@ -229,7 +229,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour
     public bool MergeMainTex {
         get { return MergeSameDimensionTextures && settings.MergeMainTex; }
         set { settings.MergeMainTex = value; } }
-    public bool KeepMMDBlendShapes { get { return settings.KeepMMDBlendShapes; } set { settings.KeepMMDBlendShapes = value; } }
+    public bool MMDCompatibility { get { return settings.MMDCompatibility; } set { settings.MMDCompatibility = value; } }
     public bool DeleteUnusedComponents { get { return settings.DeleteUnusedComponents; } set { settings.DeleteUnusedComponents = value; } }
     public bool DeleteUnusedGameObjects { get { return settings.DeleteUnusedGameObjects != 0; } set { settings.DeleteUnusedGameObjects = value ? 1 : 0; } }
     public bool OptimizeFXLayer { get { return settings.OptimizeFXLayer; } set { settings.OptimizeFXLayer = value; } }
@@ -281,7 +281,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour
         {nameof(MergeDifferentPropertyMaterials), "Merge Different Property Materials"},
         {nameof(MergeSameDimensionTextures), "Merge Same Dimension Textures"},
         {nameof(MergeMainTex), "Merge MainTex"},
-        {nameof(KeepMMDBlendShapes), "Keep MMD Blend Shapes"},
+        {nameof(MMDCompatibility), "MMD Compatibility"},
         {nameof(DeleteUnusedComponents), "Delete Unused Components"},
         {nameof(DeleteUnusedGameObjects), "Delete Unused GameObjects"},
         {nameof(OptimizeFXLayer), "Optimize FX Layer"},
@@ -320,7 +320,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour
             {nameof(Settings.CombineApproximateMotionTimeAnimations), false},
             {nameof(Settings.DisablePhysBonesWhenUnused), true},
             {nameof(Settings.MergeSameRatioBlendShapes), true},
-            {nameof(Settings.KeepMMDBlendShapes), true},
+            {nameof(Settings.MMDCompatibility), true},
             {nameof(Settings.DeleteUnusedComponents), true},
             {nameof(Settings.DeleteUnusedGameObjects), 0},
         }),
@@ -340,7 +340,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour
             {nameof(Settings.CombineApproximateMotionTimeAnimations), false},
             {nameof(Settings.DisablePhysBonesWhenUnused), true},
             {nameof(Settings.MergeSameRatioBlendShapes), true},
-            {nameof(Settings.KeepMMDBlendShapes), true},
+            {nameof(Settings.MMDCompatibility), true},
             {nameof(Settings.DeleteUnusedComponents), true},
             {nameof(Settings.DeleteUnusedGameObjects), 0},
         }),
@@ -360,7 +360,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour
             {nameof(Settings.CombineApproximateMotionTimeAnimations), true},
             {nameof(Settings.DisablePhysBonesWhenUnused), true},
             {nameof(Settings.MergeSameRatioBlendShapes), true},
-            {nameof(Settings.KeepMMDBlendShapes), false},
+            {nameof(Settings.MMDCompatibility), false},
             {nameof(Settings.DeleteUnusedComponents), true},
             {nameof(Settings.DeleteUnusedGameObjects), 1},
         }),
@@ -420,7 +420,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour
     private HashSet<string> usedBlendShapes = new HashSet<string>();
     private Dictionary<SkinnedMeshRenderer, List<int>> blendShapesToBake = new Dictionary<SkinnedMeshRenderer, List<int>>();
     private Dictionary<AnimationPath, AnimationPath> newAnimationPaths = new Dictionary<AnimationPath, AnimationPath>();
-    private List<(Material target, Material source, ShaderOptimizer.OptimizedShader optimizerResult)> optimizedMaterials = new List<(Material, Material, ShaderOptimizer.OptimizedShader)>();
+    private List<(Material target, List<Material> sources, ShaderOptimizer.OptimizedShader optimizerResult)> optimizedMaterials = new List<(Material, List<Material>, ShaderOptimizer.OptimizedShader)>();
     private List<string> optimizedMaterialImportPaths = new List<string>();
     private Dictionary<string, List<List<string>>> oldPathToMergedPaths = new Dictionary<string, List<List<string>>>();
     private Dictionary<string, string> oldPathToMergedPath = new Dictionary<string, string>();
@@ -1240,7 +1240,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour
             newBinding.type = modifiedPath.Item3;
             changed = true;
         }
-        else if (binding.type == typeof(MeshRenderer) && newAnimationPaths.TryGetValue((binding.path, binding.propertyName, typeof(SkinnedMeshRenderer)), out modifiedPath))
+        else if (typeof(Renderer).IsAssignableFrom(binding.type) && newAnimationPaths.TryGetValue((binding.path, binding.propertyName, typeof(SkinnedMeshRenderer)), out modifiedPath))
         {
             newBinding.path = modifiedPath.Item1;
             newBinding.propertyName = modifiedPath.Item2;
@@ -1670,6 +1670,11 @@ public class d4rkAvatarOptimizer : MonoBehaviour
                 errorMessages[i].Add("useless");
                 continue;
             }
+            if (i <= 2 && MMDCompatibility)
+            {
+                errorMessages[i].Add("MMD compatibility requires the first 3 layers to be kept as is");
+                continue;
+            }
             var layer = fxLayerLayers[i];
             var stateMachine = layer.stateMachine;
             if (stateMachine == null)
@@ -2017,6 +2022,8 @@ public class d4rkAvatarOptimizer : MonoBehaviour
         int lastNonUselessLayer = fxLayerLayers.Length;
         for (int i = fxLayerLayers.Length - 1; i >= 0; i--)
         {
+            if (i <= 2 && MMDCompatibility)
+                break;
             var layer = fxLayerLayers[i];
             bool isNotFirstLayerOrLastNonUselessLayerCanBeFirst = i != 0 ||
                 (lastNonUselessLayer < fxLayerLayers.Length && fxLayerLayers[lastNonUselessLayer].avatarMask == layer.avatarMask
@@ -2195,14 +2202,13 @@ public class d4rkAvatarOptimizer : MonoBehaviour
                 }
             }
         }
-        foreach (var constraint in GetComponentsInChildren<Behaviour>(true).OfType<IConstraint>())
+        foreach (var behavior in GetComponentsInChildren<Behaviour>(true)
+            .Where(b => b != null && (b.GetType().Name.Contains("Constraint") || b.GetType().FullName.StartsWithSimple("RootMotion.FinalIK"))))
         {
-            for (int i = 0; i < constraint.sourceCount; i++)
+            foreach (var t in FindReferencedTransforms(behavior))
             {
-                AddDependency(constraint.GetSource(i).sourceTransform, constraint as Object);
+                AddDependency(t, behavior);
             }
-            AddDependency((constraint as LookAtConstraint)?.worldUpObject, constraint as Object);
-            AddDependency((constraint as AimConstraint)?.worldUpObject, constraint as Object);
         }
         foreach (var skinnedRenderer in GetComponentsInChildren<SkinnedMeshRenderer>(true))
         {
@@ -2425,7 +2431,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour
             for (int i = 0; i < mesh.blendShapeCount; i++)
             {
                 var name = mesh.GetBlendShapeName(i);
-                if (KeepMMDBlendShapes && MMDBlendShapes.Contains(name))
+                if (MMDCompatibility && MMDBlendShapes.Contains(name))
                 {
                     usedBlendShapes.Add(path + name);
                     continue;
@@ -2480,7 +2486,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour
             for (int i = 0; i < mesh.blendShapeCount; i++)
             {
                 var name = mesh.GetBlendShapeName(i);
-                if (KeepMMDBlendShapes && MMDBlendShapes.Contains(name))
+                if (MMDCompatibility && MMDBlendShapes.Contains(name))
                     continue;
                 if (mesh.GetBlendShapeFrameCount(i) == 1)
                 {
@@ -2666,8 +2672,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour
         if (fxLayer == null)
             return map;
         foreach (var binding in GetAllUsedFXLayerCurveBindings()) {
-            if (!binding.propertyName.StartsWithSimple("material.") ||
-                (binding.type != typeof(SkinnedMeshRenderer) && binding.type != typeof(MeshRenderer)))
+            if (!binding.propertyName.StartsWithSimple("material.") || !typeof(Renderer).IsAssignableFrom(binding.type))
                 continue;
             if (!map.TryGetValue(binding.path, out var props)) {
                 map[binding.path] = (props = new HashSet<string>());
@@ -3430,13 +3435,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour
             optimizedMaterial.shader = null;
             optimizedMaterial.name = "m_" + name.Substring(2);
             materials[i] = optimizedMaterial;
-            optimizedMaterials.Add((optimizedMaterial, source[0], optimizedShader[i]));
-            foreach (var prop in parsedShader[i].properties)
-            {
-                if (prop.type != ParsedShader.Property.Type.Texture2D)
-                    continue;
-                var tex = source.Select(m => m.GetTexture(prop.name)).FirstOrDefault(t => t != null);
-            }
+            optimizedMaterials.Add((optimizedMaterial, source, optimizedShader[i]));
             var arrayList = new List<(string name, Texture2DArray array)>();
             foreach (var texArray in propertyTextureArrayIndex[i])
             {
@@ -3470,7 +3469,8 @@ public class d4rkAvatarOptimizer : MonoBehaviour
         for (int i = 0; i < optimizedMaterials.Count; i++)
         {
             var mat = optimizedMaterials[i].target;
-            var source = optimizedMaterials[i].source;
+            var sources = optimizedMaterials[i].sources;
+            var source = sources[0];
             var optimizedShader = optimizedMaterials[i].optimizerResult;
             DisplayProgressBar($"Loading optimized shader {mat.name}", 0.7f + 0.2f * (i / (float)optimizedMaterials.Count));
             Profiler.StartSection("AssetDatabase.LoadAssetAtPath<Shader>()");
@@ -3499,7 +3499,8 @@ public class d4rkAvatarOptimizer : MonoBehaviour
             {
                 if (!source.HasProperty(prop) || texArrayProperties.Contains(prop))
                     continue;
-                mat.SetTexture(prop, source.GetTexture(prop));
+                var tex = sources.Select(m => m.GetTexture(prop)).FirstOrDefault(t => t != null);
+                mat.SetTexture(prop, tex);
                 mat.SetTextureOffset(prop, source.GetTextureOffset(prop));
                 mat.SetTextureScale(prop, source.GetTextureScale(prop));
             }
@@ -3507,7 +3508,8 @@ public class d4rkAvatarOptimizer : MonoBehaviour
             {
                 if (!source.HasProperty(prop))
                     continue;
-                mat.SetTexture(prop, source.GetTexture(prop));
+                var tex = sources.Select(m => m.GetTexture(prop)).FirstOrDefault(t => t != null);
+                mat.SetTexture(prop, tex);
             }
             foreach (var prop in optimizedShader.floatProperties)
             {
