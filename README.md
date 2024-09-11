@@ -8,9 +8,9 @@ d4rkpl4y3r's VRChat avatar 3.0 optimizer that aims to reduce skinned mesh & mate
 Alternatively you can click the "Create Optimized Copy" button to create a new avatar with optimized materials and meshes. That way you can test the optimized version in editor to validate it works properly before uploading it. If everything works correctly you can then upload that optimized copy.
 
 ## Installation
-To install the optimizer with VCC you need to add the url `https://d4rkc0d3r.github.io/vpm-repos/main.json` as a custom repository.
+To install the optimizer with VCC you need to add the url `https://vpm.noridev.moe/index.json` as a custom repository.
 
-1. [Click here](https://d4rkc0d3r.github.io/vpm-repos/main_redirect.html)
+1. [![Add to VCC](https://img.shields.io/badge/-Add%20to%20VCC-%232baac1?style=for-the-badge)](https://vpm.noridev.moe/)
 2. Allow the redirect to open with VCC
 3. VCC should now be open with a dialog asking you to add the repository
 4. Click I understand, Add Repository in the popup after reading its contents
