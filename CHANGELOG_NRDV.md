@@ -10,3 +10,4 @@ Based on d4rkAvatarOptimizer version: <b>3.9.0</b>
 ### Changes
 - Separate `Keep MMD Blend Shapes` and `MMD Compatibility`.
   - This will allow you to keep FX layers compatible while clearing out unnecessary MMD Blend shapes.
+- Added patch name to distinguish it from the original d4rkAvatarOptimizer.

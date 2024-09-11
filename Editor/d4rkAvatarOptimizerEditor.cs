@@ -53,7 +53,7 @@ public class d4rkAvatarOptimizerEditor : Editor
         {
             EditorGUILayout.LabelField($"<size=20>d4rk{(currentViewWidth > 350 ? "pl4y3r's" : "")} Avatar Optimizer</size>", new GUIStyle(EditorStyles.label) { richText = true, alignment = TextAnchor.LowerCenter });
             settingsRect = GUILayoutUtility.GetLastRect();
-            EditorGUILayout.LabelField($"v{packageInfo.version}", EditorStyles.centeredGreyMiniLabel);
+            EditorGUILayout.LabelField($"v{packageInfo.version} | Custom by NoriDev", EditorStyles.centeredGreyMiniLabel);
         }
 
         settingsRect.width = 24;
