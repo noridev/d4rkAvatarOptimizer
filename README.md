@@ -21,7 +21,7 @@ After that you can add and update the optimizer like any other packages in your 
 ### Basic
 This preset only uses optimizations that don't affect the behavior of the avatar.
 * Removes unused components and blendshapes & bones from skinned meshes
-* Bakes non animated blend shapes into the mesh
+* Bakes non-animated blend shapes into the mesh
 * Merges all skinned meshes that are always animated in the same way
 * Merges material slots that use the same material
 * Merges toggles in the FXLayer into a direct blend tree
@@ -64,7 +64,7 @@ There are also some settings to tweak the optimization. You can read about their
 
 ![Example Screenshot](./Documentation~/img/example0.png)
 ## Apply on Upload
-Automatically applies the optimizer to the avatar before uploading it to vrc. This is non destructive, the avatar in your scene will stay as it is.
+Automatically applies the optimizer to the avatar before uploading it to vrc. This is non-destructive, the avatar in your scene will stay as it is.
 ## Write Properties as Static Values
 This is very similar to what some shaders call locking in or baking. If you use this option you should disable the locking in or baking feature of your shader.
 
