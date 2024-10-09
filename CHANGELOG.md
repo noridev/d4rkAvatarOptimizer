@@ -4,17 +4,22 @@
   * This reduces avatar download and uncompressed size slightly.
 * Reduced the amount of shader variants generated when using `Write Properties as Static Values`.
   * Forward base passes don't generate variants without the `LIGHTPROBE_SH` keyword anymore.
-  * Materials with render queue > 2500 don't generate any shadow related variants and strip the shadow caster pass.
+  * Materials with render queue > 2500 don't generate any shadow related variants.
 
 ### Changes
 * Generated shader names now have a hash suffix.
 * `Keep MMD Blend Shapes` is now `MMD Compatibility` and also prevents the first 3 fx layers to get merged or deleted. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues/122)
+* Rewrote handling of material property animations with WD ON while using `Shader Toggles`.
+  * It now tracks which meshes are animated and put those into a mask in the material instead of checking for NaN values.
 
 ### Bug Fixes
 * Copy the toggle `Normalized Blend Values` of direct blend trees. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues/120)
 * Fix `FindAllPhysBoneDependencies` not checking VRCConstraints or FinalIK components. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues/123)
 * Fix animation bindings of the base type `Renderer` not getting respected properly. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues/121)
 * Shader parser now handles `ColorMask 0` passes with no code block correctly and throws a parse error for other non code block passes.
+* Fix optimizer not checking all the animator controllers in the avatar descriptor for some things.
+* Fix special animation layers not getting updated animation clips.
+* Layers with only a off animation no longer block default disabled meshes from using NaNimation. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues/126)
 
 ## v3.8.0
 ### Features
