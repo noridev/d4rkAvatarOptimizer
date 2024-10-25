@@ -1,3 +1,12 @@
+## v3.9.2
+### Bug Fixes
+* Fix shader analyzer not handling `_fragment` and other per pass suffixes for `shader_feature` pragmas.
+* Fix shader analyzer parsing ShaderLab case sensitive even though its not supposed to be. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/pull/130)
+
+## v3.9.1
+### Bug Fixes
+* Fix crash when the avatar has a skinned mesh with out of bounds bone indices. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues/129)
+
 ## v3.9.0
 ### Features
 * Generated shaders and materials are now stripped of all properties that got baked into the shader.
@@ -11,6 +20,7 @@
 * `Keep MMD Blend Shapes` is now `MMD Compatibility` and also prevents the first 3 fx layers to get merged or deleted. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues/122)
 * Rewrote handling of material property animations with WD ON while using `Shader Toggles`.
   * It now tracks which meshes are animated and put those into a mask in the material instead of checking for NaN values.
+* Automatically add the mesh of RealKissSystem to exclusions internally.
 
 ### Bug Fixes
 * Copy the toggle `Normalized Blend Values` of direct blend trees. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues/120)
@@ -20,6 +30,7 @@
 * Fix optimizer not checking all the animator controllers in the avatar descriptor for some things.
 * Fix special animation layers not getting updated animation clips.
 * Layers with only a off animation no longer block default disabled meshes from using NaNimation. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues/126)
+* Fix `IsAnimatableBinding` not checking if the bindings type is a base type of the component types.
 
 ## v3.8.0
 ### Features

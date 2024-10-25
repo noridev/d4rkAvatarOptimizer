@@ -1069,16 +1069,19 @@ namespace d4rkpl4y3r.AvatarOptimizer
                     parsedShader.functions.TryGetValue(nextIdentifier, out func);
                     pass.fragment = func ?? new ParsedShader.Function() { name = nextIdentifier };
                     break;
-                case "shader_feature":
-                case "shader_feature_local":
-                    while (nextIdentifier != null) {
-                        pass.shaderFeatureKeyWords.Add(nextIdentifier);
-                        parsedShader.shaderFeatureKeyWords.Add(nextIdentifier);
-                        nextIdentifier = ParseIdentifierAndTrailingWhitespace(line, ref index);
-                    }
-                    break;
                 case "surface":
                     throw new ParserException("Surface shader is not supported.");
+                default:
+                    if (pragmaName.StartsWithSimple("shader_feature"))
+                    {
+                        while (nextIdentifier != null) {
+                            pass.shaderFeatureKeyWords.Add(nextIdentifier);
+                            parsedShader.shaderFeatureKeyWords.Add(nextIdentifier);
+                            nextIdentifier = ParseIdentifierAndTrailingWhitespace(line, ref index);
+                        }
+                    }
+                    break;
+
             }
         }
 
@@ -1194,7 +1197,8 @@ namespace d4rkpl4y3r.AvatarOptimizer
             for (int lineIndex = 0; lineIndex < lines.Count; lineIndex++)
             {
                 string line = lines[lineIndex];
-                if (line == "Properties")
+                string lowerLine = line.ToLowerInvariant();
+                if (lowerLine == "properties")
                 {
                     foundProperties = true;
                     if (lines[lineIndex + 1] != "{")
@@ -1239,7 +1243,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
                         }
                     }
                 }
-                else if (line == "Tags")
+                else if (lowerLine == "tags")
                 {
                     if (lines[lineIndex + 1] != "{")
                     {
@@ -1301,7 +1305,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
                     output.Add(line == "CGPROGRAM" ? "ENDCG" : "ENDHLSL");
                     currentPass.codeBlockLineCount = output.Count - currentPass.startLineIndex - currentPass.codeBlockStartIndex;
                 }
-                else if (line == "Pass")
+                else if (lowerLine == "pass")
                 {
                     if (lines[lineIndex + 1] != "{")
                     {
@@ -1312,10 +1316,10 @@ namespace d4rkpl4y3r.AvatarOptimizer
                     currentPass.startLineIndex = output.Count;
                     passCurlyBraceDepth = 1;
                     lineIndex++;
-                    output.Add($"Pass//{parsedShader.passes.Count-1}");
+                    output.Add($"pass//{parsedShader.passes.Count-1}");
                     output.Add("{");
                 }
-                else if (line.StartsWithSimple("UsePass"))
+                else if (lowerLine.StartsWithSimple("usepass"))
                 {
                     throw new ParserException("UsePass is not supported.");
                 }
@@ -1334,7 +1338,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
                             bool hasColorMask0 = false;
                             for (int i = currentPass.startLineIndex; i < output.Count; i++)
                             {
-                                if (output[i].StartsWithSimple("ColorMask") && output[i].EndsWith("0"))
+                                if (output[i].ToLowerInvariant().StartsWithSimple("colormask") && output[i].EndsWith("0"))
                                 {
                                     hasColorMask0 = true;
                                     break;
@@ -1371,7 +1375,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
                         output.Add(line);
                     }
                 }
-                else if (currentPass != null && line.StartsWithSimple("Name"))
+                else if (currentPass != null && lowerLine.StartsWithSimple("name"))
                 {
                     currentPass.name = line.Substring(5).Trim('\t', ' ', '"').ToUpperInvariant();
                 }
@@ -1389,7 +1393,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
                                 string propName = match.Groups[1].Value;
                                 if (parsedShader.propertyTable.TryGetValue(propName, out var prop))
                                 {
-                                    prop.shaderLabParams.Add(shaderLabParam);
+                                    prop.shaderLabParams.Add(shaderLabParam.ToLowerInvariant());
                                 }
                             }
                         }
@@ -1398,7 +1402,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
             }
             if (!foundProperties)
             {
-                output.Insert(2, "Properties");
+                output.Insert(2, "properties");
                 output.Insert(3, "{");
                 output.Insert(4, "}");
                 foreach (var pass in parsedShader.passes)
@@ -2889,8 +2893,6 @@ namespace d4rkpl4y3r.AvatarOptimizer
                             pragmaOutput.Add(line);
                         }
                         break;
-                    case "shader_feature":
-                    case "shader_feature_local":
                     case "skip_optimizations":
                         break;
                     case "multi_compile_fwdbase":
@@ -2903,7 +2905,9 @@ namespace d4rkpl4y3r.AvatarOptimizer
                         pragmaOutput.Add(stripShadowVariants ? "#pragma multi_compile_fwdadd" : "#pragma multi_compile_fwdadd_fullshadows");
                         break;
                     default:
-                        pragmaOutput.Add(line);
+                        if (!identifier.StartsWithSimple("shader_feature")) {
+                            pragmaOutput.Add(line);
+                        }
                         break;
                 }
                 return null;
@@ -3174,7 +3178,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
                 ParseAndEvaluateIfex(lines, ref lineIndex, output);
                 string line = lines[lineIndex++];
                 output.Add(line);
-                if (line == "Properties")
+                if (line.ToLowerInvariant() == "properties")
                 {
                     break;
                 }
@@ -3270,9 +3274,10 @@ namespace d4rkpl4y3r.AvatarOptimizer
             {
                 ParseAndEvaluateIfex(lines, ref lineIndex, output);
                 string line = lines[lineIndex];
-                if (line.StartsWithSimple("CustomEditor"))
+                string lowerLine = line.ToLowerInvariant();
+                if (lowerLine.StartsWithSimple("customeditor"))
                     continue;
-                if (line.StartsWithSimple("Pass//"))
+                if (lowerLine.StartsWithSimple("pass//"))
                 {
                     passID = int.Parse(line.Substring(6));
                     currentPass = parsedShader.passes[passID];
