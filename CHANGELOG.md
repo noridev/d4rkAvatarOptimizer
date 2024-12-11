@@ -1,3 +1,11 @@
+## v3.9.3
+### Changes
+* Use the existing auto detection of penetrators to add them to exclusions instead of trying to do partial optimizations on them.
+
+### Bug Fixes
+* Fix meshes with different cast & receive shadow settings getting merged together.
+* Fix ParticleSystems with skinned mesh renderer shape breaking when merging meshes & materials.
+
 ## v3.9.2
 ### Bug Fixes
 * Fix shader analyzer not handling `_fragment` and other per pass suffixes for `shader_feature` pragmas.

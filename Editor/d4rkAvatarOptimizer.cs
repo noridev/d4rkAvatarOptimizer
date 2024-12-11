@@ -4,6 +4,8 @@ using System.Linq;
 using VRC.SDK3.Dynamics.Contact.Components;
 using VRC.SDK3.Dynamics.PhysBone.Components;
 using System.Text.RegularExpressions;
+using BestHTTP.SecureProtocol.Org.BouncyCastle.Crypto.Tls;
+
 
 #if UNITY_EDITOR
 using System.Threading;
@@ -671,6 +673,32 @@ public class d4rkAvatarOptimizer : MonoBehaviour
         return polyCount;
     }
 
+    private Dictionary<Renderer, List<ParticleSystem>> cache_ParticleSystemsUsingRenderer = null;
+    private List<ParticleSystem> GetParticleSystemsUsingRenderer(Renderer candidate)
+    {
+        if (cache_ParticleSystemsUsingRenderer == null)
+        {
+            cache_ParticleSystemsUsingRenderer = new Dictionary<Renderer, List<ParticleSystem>>();
+            foreach (var ps in GetUsedComponentsInChildren<ParticleSystem>())
+            {
+                Renderer renderer = ps.shape.shapeType == ParticleSystemShapeType.SkinnedMeshRenderer ? ps.shape.skinnedMeshRenderer : null;
+                renderer = ps.shape.shapeType == ParticleSystemShapeType.MeshRenderer ? ps.shape.meshRenderer : renderer;
+                if (renderer != null)
+                {
+                    if (!cache_ParticleSystemsUsingRenderer.TryGetValue(renderer, out var list))
+                    {
+                        list = new List<ParticleSystem>();
+                        cache_ParticleSystemsUsingRenderer[renderer] = list;
+                    }
+                    list.Add(ps);
+                }
+            }
+        }
+        if (cache_ParticleSystemsUsingRenderer.TryGetValue(candidate, out var result))
+            return result;
+        return cache_ParticleSystemsUsingRenderer[candidate] = new List<ParticleSystem>();
+    }
+
     private static bool IsMaterialReadyToCombineWithOtherMeshes(Material material)
     {
         return material != null && ShaderAnalyzer.Parse(material.shader).CanMerge();
@@ -681,6 +709,8 @@ public class d4rkAvatarOptimizer : MonoBehaviour
         if (candidate.TryGetComponent(out Cloth cloth))
             return false;
         if (candidate is MeshRenderer && (candidate.gameObject.layer == 12 || !MergeStaticMeshesAsSkinned))
+            return false;
+        if (GetParticleSystemsUsingRenderer(candidate).Any(ps => !ps.shape.useMeshMaterialIndex || candidate is MeshRenderer))
             return false;
         return true;
     }
@@ -720,6 +750,10 @@ public class d4rkAvatarOptimizer : MonoBehaviour
         if (!MergeSkinnedMeshes)
             return false;
         if (list[0].gameObject.layer != candidate.gameObject.layer)
+            return false;
+        if (list[0].shadowCastingMode != candidate.shadowCastingMode)
+            return false;
+        if (list[0].receiveShadows != candidate.receiveShadows)
             return false;
         bool OneOfParentsHasGameObjectToggleThatTheOthersArentChildrenOf(Transform t, string[] otherPaths)
         {
@@ -3781,9 +3815,11 @@ public class d4rkAvatarOptimizer : MonoBehaviour
         if (list.Any(slot => slot.GetTopology() != candidate.GetTopology()))
             return false;
         bool IsAffectedByMaterialSwap(MaterialSlot slot) =>
-            (slotSwapMaterials.ContainsKey((GetPathToRoot(slot.renderer), slot.index)))
+            slotSwapMaterials.ContainsKey((GetPathToRoot(slot.renderer), slot.index))
             || (materialSlotRemap.TryGetValue((GetPathToRoot(slot.renderer), slot.index), out var remap) && slotSwapMaterials.ContainsKey(remap));
         if (IsAffectedByMaterialSwap(list[0]) || IsAffectedByMaterialSwap(candidate))
+            return false;
+        if (GetParticleSystemsUsingRenderer(candidate.renderer).Any(ps => ps.shape.useMeshMaterialIndex && ps.shape.meshMaterialIndex == candidate.index))
             return false;
         var listMaterials = list.Select(slot => slot.material).ToArray();
         bool allTheSameAsCandidate = listMaterials.All(mat => mat == candidateMat);
@@ -4074,11 +4110,12 @@ public class d4rkAvatarOptimizer : MonoBehaviour
                 newMesh.SetVertices(targetVertices);
                 newMesh.bindposes = mesh.bindposes;
                 newMesh.SetBoneWeights(targetWeights.ToArray());
-                if (targetColor != null && targetColor.Any(c => !c.Equals(Color.white)))
+                bool particleSystemUsesMeshColor = GetParticleSystemsUsingRenderer(meshRenderer).Any(ps => ps.shape.useMeshColors);
+                if (targetColor != null && (particleSystemUsesMeshColor || targetColor.Any(c => !c.Equals(Color.white))))
                 {
                     newMesh.colors = targetColor.ToArray();
                 }
-                else if (targetColor32 != null && targetColor32.Any(c => !c.Equals(new Color32(255, 255, 255, 255))))
+                else if (targetColor32 != null && (particleSystemUsesMeshColor || targetColor32.Any(c => !c.Equals(new Color32(255, 255, 255, 255)))))
                 {
                     newMesh.colors32 = targetColor32.ToArray();
                 }
@@ -4178,6 +4215,15 @@ public class d4rkAvatarOptimizer : MonoBehaviour
             }
 
             meshRenderer.sharedMaterials = optimizedMaterials;
+
+            foreach (var ps in GetParticleSystemsUsingRenderer(meshRenderer))
+            {
+                var shape = ps.shape;
+                if (shape.useMeshMaterialIndex)
+                {
+                    shape.meshMaterialIndex = uniqueMatchedSlots.FindIndex(l => l.Any(slot => slot.index == shape.meshMaterialIndex));
+                }
+            }
         }
     }
 
@@ -4594,11 +4640,12 @@ public class d4rkAvatarOptimizer : MonoBehaviour
             combinedMesh.SetVertices(targetVertices);
             combinedMesh.bindposes = targetBindPoses.ToArray();
             combinedMesh.SetBoneWeights(targetWeights.ToArray());
-            if (!useColor32 && targetColor.Any(c => !c.Equals(Color.white)))
+            bool hasParticleSystemUsingMeshColor = basicMergedMeshesList.Any(r => GetParticleSystemsUsingRenderer(r).Any(ps => ps.shape.useMeshColors));
+            if (!useColor32 && (hasParticleSystemUsingMeshColor || targetColor.Any(c => !c.Equals(Color.white))))
             {
                 combinedMesh.colors = targetColor.ToArray();
             }
-            else if (useColor32 && targetColor32.Any(c => !c.Equals(new Color32(255, 255, 255, 255))))
+            else if (useColor32 && (hasParticleSystemUsingMeshColor || targetColor32.Any(c => !c.Equals(new Color32(255, 255, 255, 255)))))
             {
                 combinedMesh.colors32 = targetColor32.ToArray();
             }
@@ -4729,9 +4776,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour
             }
             Profiler.EndSection();
             
-            var meshRenderer = combinableSkinnedMeshes[0];
-            meshRenderer.rootBone = targetRootBone;
-            var materials = basicMergedMeshesList.SelectMany(r => r.sharedMaterials).ToArray();
+            var targetRenderer = combinableSkinnedMeshes[0];
 
             if (avDescriptor.customEyeLookSettings.eyelidType == VRCAvatarDescriptor.EyelidType.Blendshapes
                 && avDescriptor.customEyeLookSettings.eyelidsSkinnedMesh != null)
@@ -4746,7 +4791,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour
                     {
                         if (basicMergedMeshesList[meshID] == eyeLookMeshRenderer)
                         {
-                            avDescriptor.customEyeLookSettings.eyelidsSkinnedMesh = meshRenderer;
+                            avDescriptor.customEyeLookSettings.eyelidsSkinnedMesh = targetRenderer;
                             ids[i] = combinedMesh.GetBlendShapeIndex(blendShapeMeshIDtoNewName[(meshID, ids[i])]);
                         }
                     }
@@ -4759,7 +4804,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour
                 var oldVisemeMesh = basicMergedMeshesList[meshID];
                 if (avDescriptor.VisemeSkinnedMesh == oldVisemeMesh)
                 {
-                    avDescriptor.VisemeSkinnedMesh = meshRenderer;
+                    avDescriptor.VisemeSkinnedMesh = targetRenderer;
                     string CalculateNewBlendShapeName(string blendShapeName) {
                         var blendShapeID = oldVisemeMesh.sharedMesh.GetBlendShapeIndex(blendShapeName ?? "");
                         return blendShapeMeshIDtoNewName.TryGetValue((meshID, blendShapeID), out string newName)
@@ -4783,8 +4828,8 @@ public class d4rkAvatarOptimizer : MonoBehaviour
                 var skinnedMesh = basicMergedMeshes[blobMeshID][0];
                 var oldPath = GetPathToRoot(skinnedMesh);
                 var properties = new MaterialPropertyBlock();
-                if (meshRenderer.HasPropertyBlock())
-                    meshRenderer.GetPropertyBlock(properties);
+                if (targetRenderer.HasPropertyBlock())
+                    targetRenderer.GetPropertyBlock(properties);
                 bool isActive = GetRendererDefaultEnabledState(skinnedMesh);
                 properties.SetFloat($"_IsActiveMesh{blobMeshID}", isActive ? 1f : 0f);
                 properties.SetInt("d4rkAvatarOptimizer_CombinedMeshCount", basicMergedMeshes.Count);
@@ -4821,21 +4866,28 @@ public class d4rkAvatarOptimizer : MonoBehaviour
                     }
                     animatedProperties.UnionWith(animatedMaterialPropertiesToAdd);
                 }
-                meshRenderer.SetPropertyBlock(properties);
+                targetRenderer.SetPropertyBlock(properties);
             }
 
-            for (int meshID = 1; meshID < combinableSkinnedMeshes.Count; meshID++)
+            var materials = basicMergedMeshesList.SelectMany(r => r.sharedMaterials).ToArray();
+            var originalMeshSlots = basicMergedMeshesList.SelectMany(r => MaterialSlot.GetAllSlotsFrom(r)).ToList();
+            foreach (var renderer in basicMergedMeshesList)
             {
-                var obj = combinableSkinnedMeshes[meshID].gameObject;
-                DestroyImmediate(combinableSkinnedMeshes[meshID]);
-                if (!keepTransforms.Contains(obj.transform) && (obj.transform.childCount == 0 && obj.GetNonNullComponents().Length == 1))
-                    DestroyImmediate(obj);
+                foreach (var ps in GetParticleSystemsUsingRenderer(renderer))
+                {
+                    var shape = ps.shape;
+                    shape.skinnedMeshRenderer = targetRenderer;
+                    if (shape.useMeshMaterialIndex)
+                    {
+                        shape.meshMaterialIndex = originalMeshSlots.FindIndex(s => s.renderer == renderer && s.index == shape.meshMaterialIndex);
+                    }
+                }
             }
-
-            meshRenderer.sharedMesh = combinedMesh;
-            meshRenderer.sharedMaterials = materials;
-            meshRenderer.bones = targetBones.ToArray();
-            meshRenderer.localBounds = targetBounds;
+            targetRenderer.rootBone = targetRootBone;
+            targetRenderer.sharedMesh = combinedMesh;
+            targetRenderer.sharedMaterials = materials;
+            targetRenderer.bones = targetBones.ToArray();
+            targetRenderer.localBounds = targetBounds;
 
             foreach (var blendShape in blendShapeWeights)
             {
@@ -4843,7 +4895,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour
                 {
                     if (blendShape.Key == combinedMesh.GetBlendShapeName(j))
                     {
-                        meshRenderer.SetBlendShapeWeight(j, blendShape.Value);
+                        targetRenderer.SetBlendShapeWeight(j, blendShape.Value);
                         break;
                     }
                 }
@@ -4851,18 +4903,26 @@ public class d4rkAvatarOptimizer : MonoBehaviour
 
             if (basicMergedMeshes.Count > 1)
             {
-                if (MergeSkinnedMeshesSeparatedByDefaultEnabledState && !GetRendererDefaultEnabledState(meshRenderer))
+                if (MergeSkinnedMeshesSeparatedByDefaultEnabledState && !GetRendererDefaultEnabledState(targetRenderer))
                 {
-                    meshRenderer.gameObject.SetActive(true);
-                    meshRenderer.enabled = false;
-                    var curveBinding = EditorCurveBinding.FloatCurve(GetPathToRoot(meshRenderer), typeof(SkinnedMeshRenderer), "m_Enabled");
+                    targetRenderer.gameObject.SetActive(true);
+                    targetRenderer.enabled = false;
+                    var curveBinding = EditorCurveBinding.FloatCurve(GetPathToRoot(targetRenderer), typeof(SkinnedMeshRenderer), "m_Enabled");
                     constantAnimatedValuesToAdd[curveBinding] = 1f;
                 }
                 else
                 {
-                    meshRenderer.gameObject.SetActive(true);
-                    meshRenderer.enabled = true;
+                    targetRenderer.gameObject.SetActive(true);
+                    targetRenderer.enabled = true;
                 }
+            }
+
+            for (int meshID = 1; meshID < combinableSkinnedMeshes.Count; meshID++)
+            {
+                var obj = combinableSkinnedMeshes[meshID].gameObject;
+                DestroyImmediate(combinableSkinnedMeshes[meshID]);
+                if (!keepTransforms.Contains(obj.transform) && obj.transform.childCount == 0 && obj.GetNonNullComponents().Length == 1)
+                    DestroyImmediate(obj);
             }
 
             Profiler.StartSection("AssetDatabase.SaveAssets()");
@@ -4872,6 +4932,9 @@ public class d4rkAvatarOptimizer : MonoBehaviour
         allBonesAndParentsWithOriginalScale.ForEach(pair => pair.bone.localScale = pair.scale);
         transform.position = originalRootPosition;
         transform.rotation = originalRootRotation;
+
+        // flush particle system cache since we merged meshes
+        cache_ParticleSystemsUsingRenderer = null;
     }
 
     private HashSet<Transform> cache_GetAllExcludedTransforms;
@@ -4888,6 +4951,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour
             .Where(t => t != null)
             .Select(t => t.Cast<Transform>().FirstOrDefault(child => child.TryGetComponent(out SkinnedMeshRenderer _)))
             .Where(t => t != null));
+        hardCodedExclusions.AddRange(FindAllPenetrators().Select(p => p.transform));
         foreach (var excludedTransform in ExcludeTransforms.Concat(hardCodedExclusions)) {
             if (excludedTransform == null)
                 continue;
