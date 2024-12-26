@@ -508,6 +508,21 @@ public class d4rkAvatarOptimizer : MonoBehaviour
         "怒り", "Get angry",
         "上", "UP",
         "下", "Down",
+        "Grin",
+        "Blink",
+        "Blink Happy",
+        "Pupil",
+        "Wink",
+        "Wink Right",
+        "Wink 2",
+        "Wink 2 Right",
+        "Calm",
+        "Stare",
+        "Cheerful",
+        "Sadness",
+        "Anger",
+        "Upper",
+        "Lower"
     };
 
     private static float progressBar = 0;
@@ -1742,6 +1757,15 @@ public class d4rkAvatarOptimizer : MonoBehaviour
                 continue;
             }
             var layer = fxLayerLayers[i];
+            if (layer.syncedLayerIndex != -1)
+            {
+                errorMessages[i].Add($"synced with layer {layer.syncedLayerIndex}");
+                if (layer.syncedLayerIndex >= 0 && layer.syncedLayerIndex < fxLayerLayers.Length)
+                {
+                    errorMessages[layer.syncedLayerIndex].Insert(0, $"layer {i} is synced with this layer");
+                }
+                continue;
+            }
             var stateMachine = layer.stateMachine;
             if (stateMachine == null)
             {
@@ -2091,6 +2115,8 @@ public class d4rkAvatarOptimizer : MonoBehaviour
             if (i <= 2 && MMDCompatibility)
                 break;
             var layer = fxLayerLayers[i];
+            if (layer.syncedLayerIndex != -1)
+                continue;
             bool isNotFirstLayerOrLastNonUselessLayerCanBeFirst = i != 0 ||
                 (lastNonUselessLayer < fxLayerLayers.Length && fxLayerLayers[lastNonUselessLayer].avatarMask == layer.avatarMask
                     && fxLayerLayers[lastNonUselessLayer].defaultWeight == 1 && !isAffectedByLayerWeightControl.Contains(lastNonUselessLayer));
@@ -2122,6 +2148,13 @@ public class d4rkAvatarOptimizer : MonoBehaviour
                 continue;
             }
             lastNonUselessLayer = i;
+        }
+        for (int i = 0; i < fxLayerLayers.Length; i++)
+        {
+            if (fxLayerLayers[i].syncedLayerIndex != -1)
+            {
+                uselessLayers.Remove(fxLayerLayers[i].syncedLayerIndex);
+            }
         }
         Profiler.EndSection();
         return cache_FindUselessFXLayers = uselessLayers;
