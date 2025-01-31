@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.x.x] - 20xx-xx-xx
+Based on d4rkAvatarOptimizer version: <b>3.9.4</b>
+
+### Added
+- VRCFury로 복제된 자산 중 중복된 자산 제거 (d4rkc0d3r/d4rkAvatarOptimizer#136)
+  - 동일한 자산이 여러 개 존재하는 경우, 해당 자산들을 병합하여 렌더러 및 머티리얼 슬롯을 줄입니다.
+
+---
+
 ## [1.0.6] - 2025-02-01
 Based on d4rkAvatarOptimizer version: <b>3.9.4</b>
 
