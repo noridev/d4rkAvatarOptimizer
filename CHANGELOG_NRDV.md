@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Based on d4rkAvatarOptimizer version: <b>3.9.4</b>
 
 ### Changed
-- 기반 d4rkAvatarOptimizer 버전 업데이트 (<small>3.9.2</small> -> **3.9.4**)
+- 기반 d4rkAvatarOptimizer 버전 업데이트 (<small>3.9.3</small> -> **3.9.4**)
 
 ---
 
