@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Based on d4rkAvatarOptimizer version: <b>3.9.4</b>
 
 ### Added
-- VRCFury로 복제된 자산 중 중복된 자산 제거 (d4rkc0d3r/d4rkAvatarOptimizer#136)
+- VRCFury로 복제된 자산 중 중복된 자산을 병합 및 제거 (d4rkc0d3r/d4rkAvatarOptimizer#136)
   - 동일한 자산이 여러 개 존재하는 경우, 해당 자산들을 병합하여 렌더러 및 머티리얼 슬롯을 줄입니다.
 
 ---
