@@ -2,11 +2,12 @@
   "name": "moe.noridev.d4rkavataroptimizer",
   "displayName": "NoriDev - d4rkAvatarOptimizer",
   "version": "1.0.5",
-  "baseVersion": "3.9.3",
+  "baseVersion": "3.9.4",
   "unity": "2019.4",
   "description": "An optimizer aiming to reduce mesh & material count and more of VRChat 3.0 avatars.",
   "dependencies": {},
   "url": "",
+  "changelogUrl": "https://github.com/noridev/d4rkAvatarOptimizer/blob/main/CHANGELOG_NRDV.md",
   "gitDependencies": {},
   "vpmDependencies": {},
   "legacyFolders": {
