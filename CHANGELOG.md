@@ -1,3 +1,21 @@
+## v3.9.9
+### Changes
+* Remove `#pragma enable_d3d11_debug_symbols` from the generated shaders.
+* Refactored the settings GUI to use GUI scopes.
+
+### Bug Fixes
+* Fixed modular avatar and VRCFury warning to still use the old name of the `Apply on Upload` option.
+* Fix geometry shader input parameter semantic not getting copied.
+
+## v3.9.8
+### Bug Fixes
+* Fix regression bug from last fix causing mesh toggles with basic merge to not work.
+
+## v3.9.7
+### Bug Fixes
+* Fix shader toggles removing the game object toggles causing child object to no longer get toggled. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues/133)
+* Fix VRCConstraint Target Transform not marking bones as moving. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues/143)
+
 ## v3.9.6
 ### Bug Fixes
 * Fix optimizer not running when entering playmode a second time when domain reload on play mode is disabled.

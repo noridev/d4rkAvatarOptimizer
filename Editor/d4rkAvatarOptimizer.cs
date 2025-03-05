@@ -1277,6 +1277,15 @@ public class d4rkAvatarOptimizer : MonoBehaviour
             if (transform != null)
             {
                 var path = GetPathToRoot(transform);
+                // merged meshes move all their sibling components to a new child object
+                // the general remap in transformFromOldPath points to that new child object
+                // which means transform and renderer animations should still point to the original parent object
+                // while gameobject toggles as well as other component animations should not
+                if (path.EndsWith("/d4rkAO_mergeTargetRoot") &&
+                    (binding.type == typeof(Transform) || typeof(Renderer).IsAssignableFrom(binding.type)))
+                {
+                    path = path.Substring(0, path.Length - "/d4rkAO_mergeTargetRoot".Length);
+                }
                 changed = changed || path != newBinding.path;
                 newBinding.path = path;
                 if (binding.type == typeof(MeshRenderer) && !transform.TryGetComponent(out MeshRenderer renderer))
@@ -1432,6 +1441,10 @@ public class d4rkAvatarOptimizer : MonoBehaviour
         {
             var curve = AnimationUtility.GetEditorCurve(clip, binding);
             var fixedBinding = FixAnimationBinding(binding, ref changed);
+            if (binding.type == typeof(GameObject) && binding.propertyName == "m_IsActive")
+            {
+                SetFloatCurve(newClip, FixAnimationBindingPath(binding, ref changed), curve);
+            }
             if (fixedBinding.propertyName.StartsWithSimple("NaNimation")) {
                 var shaderToggleInfo = fixedBinding.propertyName.Substring("NaNimation".Length);
                 var propertyNames = new string[] { "m_LocalScale.x", "m_LocalScale.y", "m_LocalScale.z" };
@@ -3035,6 +3048,21 @@ public class d4rkAvatarOptimizer : MonoBehaviour
         foreach (var constraint in constraints)
         {
             transforms.Add(constraint.transform);
+            if (constraint.GetType().Name.StartsWithSimple("VRC"))
+            {
+                using (var so = new SerializedObject(constraint))
+                {
+                    var targetTransformProperty = so.FindProperty("TargetTransform");
+                    if (targetTransformProperty != null)
+                    {
+                        var targetTransform = targetTransformProperty.objectReferenceValue as Transform;
+                        if (targetTransform != null)
+                        {
+                            transforms.Add(targetTransform);
+                        }
+                    }
+                }
+            }
         }
 
         var finalIKScripts = GetComponentsInChildren<Behaviour>(true)
@@ -4324,6 +4352,11 @@ public class d4rkAvatarOptimizer : MonoBehaviour
 
     private void CombineSkinnedMeshes()
     {
+        transformFromOldPath = new Dictionary<string, Transform>();
+        foreach (var t in transform.GetAllDescendants())
+        {
+            transformFromOldPath[GetPathToRoot(t)] = t;
+        }
         var avDescriptor = GetComponent<VRCAvatarDescriptor>();
         var combinableMeshList = FindPossibleSkinnedMeshMerges();
         oldPathToMergedPaths.Clear();
@@ -4940,6 +4973,32 @@ public class d4rkAvatarOptimizer : MonoBehaviour
 
             if (basicMergedMeshes.Count > 1)
             {
+                var go = targetRenderer.gameObject;
+                var children = go.transform.Cast<Transform>().ToList();
+                var componentsToMove = go.GetComponents<Component>().Where(c => !(c is Transform) && !(c is SkinnedMeshRenderer)).ToList();
+                if (children.Count > 0 || componentsToMove.Count > 0)
+                {
+                    var subContainer = new GameObject("d4rkAO_mergeTargetRoot");
+                    subContainer.transform.parent = go.transform;
+                    subContainer.transform.localPosition = Vector3.zero;
+                    subContainer.transform.localRotation = Quaternion.identity;
+                    subContainer.transform.localScale = Vector3.one;
+                    subContainer.SetActive(targetRenderer.gameObject.activeSelf);
+                    transformFromOldPath[GetPathToRoot(go)] = subContainer.transform;
+
+                    foreach (Transform child in children)
+                    {
+                        child.parent = subContainer.transform;
+                    }
+
+                    foreach (Component comp in componentsToMove)
+                    {
+                        UnityEditorInternal.ComponentUtility.CopyComponent(comp);
+                        UnityEditorInternal.ComponentUtility.PasteComponentAsNew(subContainer);
+                        DestroyImmediate(comp);
+                    }
+                }
+
                 if (MergeSkinnedMeshesSeparatedByDefaultEnabledState && !GetRendererDefaultEnabledState(targetRenderer))
                 {
                     targetRenderer.gameObject.SetActive(true);
@@ -5081,12 +5140,6 @@ public class d4rkAvatarOptimizer : MonoBehaviour
 
     private void DestroyUnusedGameObjects()
     {
-        transformFromOldPath = new Dictionary<string, Transform>();
-        foreach (var transform in transform.GetAllDescendants())
-        {
-            transformFromOldPath[GetPathToRoot(transform)] = transform;
-        }
-
         if (!DeleteUnusedGameObjects)
             return;
 
