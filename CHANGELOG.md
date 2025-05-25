@@ -1,3 +1,18 @@
+## v3.10.1
+### Bug Fixes
+* Foot collider transform check now checks if the transform is a child of the avatar as well.
+* Fix shader optimizer throwing away properties that VRChat uses for the shader fallback system.
+
+## v3.10.0
+### Features
+* Add option to disable optimizer from running in play mode. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/pull/149)
+
+### Bug Fixes
+* Fix optimizer not copying over the disabled passes list from the source material to the generated material.
+* Fix optimizer not taking into account disabled passes when merging materials.
+* Fix only checking for same material object instead of if its a duplicate material when merging materials. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/pull/136)
+* Fix synced layers not getting their motion overrides copied and fixed. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues/138)
+
 ## v3.9.10
 ### Bug Fixes
 * Fix issue when using empty vertex shader to eat some pass.

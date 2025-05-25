@@ -4,8 +4,7 @@ using System.Linq;
 using VRC.SDK3.Dynamics.Contact.Components;
 using VRC.SDK3.Dynamics.PhysBone.Components;
 using System.Text.RegularExpressions;
-using BestHTTP.SecureProtocol.Org.BouncyCastle.Crypto.Tls;
-
+using Array = System.Array;
 
 #if UNITY_EDITOR
 using System.Threading;
@@ -1651,20 +1650,35 @@ public class d4rkAvatarOptimizer : MonoBehaviour
         
         for (int i = 0; i < optimizedControllers.Length; i++)
         {
-            var newLayer = optimizedControllers[i];
-            if (newLayer == null)
+            var newController = optimizedControllers[i];
+            if (newController == null)
                 continue;
 
-            foreach (var state in newLayer.EnumerateAllStates())
+            foreach (var state in newController.EnumerateAllStates())
             {
                 state.motion = FixMotion(state.motion, fixedMotions, layerCopyPaths[i]);
+            }
+
+            var layers = newController.layers;
+            var syncedLayerIndices = layers.Select((layer, index) => (layer, index)).Where(p => p.layer != null && p.layer.syncedLayerIndex >= 0).Select(p => p.index).ToArray();
+            foreach (var syncedLayerIndex in syncedLayerIndices)
+            {
+                var syncedLayer = layers[syncedLayerIndex];
+                foreach (var stateMotionPair in syncedLayer.EnumerateAllMotionOverrides())
+                {
+                    syncedLayer.SetOverrideMotion(stateMotionPair.state, FixMotion(stateMotionPair.motion, fixedMotions, layerCopyPaths[i]));
+                }
+            }
+            if (syncedLayerIndices.Length > 0)
+            {
+                newController.layers = layers;
             }
 
             if (DeleteUnusedGameObjects) {
                 var playAudioType = Type.GetType("VRC.SDKBase.VRC_AnimatorPlayAudio, VRCSDKBase");
                 if (playAudioType != null) {
                     var pathField = playAudioType.GetField("SourcePath", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
-                    foreach (var behaviour in newLayer.layers.SelectMany(layer => layer.stateMachine.EnumerateAllBehaviours())) {
+                    foreach (var behaviour in newController.layers.SelectMany(layer => layer.stateMachine.EnumerateAllBehaviours())) {
                         if (playAudioType.IsAssignableFrom(behaviour.GetType())) {
                             var path = (string)pathField.GetValue(behaviour) ?? "";
                             if (transformFromOldPath.TryGetValue(path, out var transform) && transform != null) {
@@ -2191,6 +2205,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour
         var fxLayerLayers = GetFXLayerLayers();
         for (int i = 0; i < fxLayerLayers.Length; i++)
         {
+            usedClips.UnionWith(fxLayerLayers[i].EnumerateAllMotionOverrides().Select(p => p.motion as AnimationClip).Where(c => c != null));
             var stateMachine = fxLayerLayers[i].stateMachine;
             if (stateMachine == null || unusedLayers.Contains(i))
                 continue;
@@ -3693,6 +3708,17 @@ public class d4rkAvatarOptimizer : MonoBehaviour
             mat.shader = shader;
             mat.renderQueue = source.renderQueue;
             Profiler.StartNextSection("CopyMaterialProperties");
+            for (int j = 0; j < source.shader.passCount; j++)
+            {
+                var lightModeValue = source.shader.FindPassTagValue(j, new ShaderTagId("LightMode"));
+                if (!string.IsNullOrEmpty(lightModeValue.name))
+                {
+                    if (!source.GetShaderPassEnabled(lightModeValue.name))
+                    {
+                        mat.SetShaderPassEnabled(lightModeValue.name, false);
+                    }
+                }
+            }
             var texArrayProperties = new HashSet<string>();
             if (texArrayPropertiesToSet.TryGetValue(mat, out var texArrays))
             {
@@ -3894,6 +3920,17 @@ public class d4rkAvatarOptimizer : MonoBehaviour
             return allTheSameAsCandidate;
         if (list.Count > 1 && listMaterials.Any(mat => mat == candidateMat))
             return true;
+        for (int j = 0; j < firstMat.shader.passCount; j++)
+        {
+            var lightModeValue = firstMat.shader.FindPassTagValue(j, new ShaderTagId("LightMode"));
+            if (!string.IsNullOrEmpty(lightModeValue.name))
+            {
+                if (firstMat.GetShaderPassEnabled(lightModeValue.name) != candidateMat.GetShaderPassEnabled(lightModeValue.name))
+                {
+                    return false;
+                }
+            }
+        }
         var parsedShader = ShaderAnalyzer.Parse(candidateMat.shader);
         if (parsedShader.parsedCorrectly == false)
             return false;
@@ -5297,101 +5334,117 @@ public class d4rkAvatarOptimizer : MonoBehaviour
 
     public class MaterialAssetComparer : IEqualityComparer<Material> {
         public bool Equals(Material a, Material b) {
-            //TODO: find a more elegant way to compare materials
+            if (a == b)
+                return true;
+            if (a == null || b == null)
+                return false;
+            if (a.shader != b.shader)
+                return false;
+            if (a.renderQueue != b.renderQueue)
+                return false;
+            if (a.doubleSidedGI != b.doubleSidedGI)
+                return false;
+            if (a.enableInstancing != b.enableInstancing)
+                return false;
+            if (a.globalIlluminationFlags != b.globalIlluminationFlags)
+                return false;
 
-            // trivial cases
-            if (a == b) return true;
-            if (a == null || b == null) return false;
+            var aKeywords = a.shaderKeywords;
+            var bKeywords = b.shaderKeywords;
+            if (aKeywords.Length != bKeywords.Length)
+                return false;
+            Array.Sort(aKeywords);
+            Array.Sort(bKeywords);
+            if (!aKeywords.SequenceEqual(bKeywords))
+                return false;
 
-            // check the basics
-            if (a.shader != b.shader) return false;
-            if (a.renderQueue != b.renderQueue) return false;
-            if (a.doubleSidedGI != b.doubleSidedGI) return false;
-            if (a.enableInstancing != b.enableInstancing) return false;
-            if (a.globalIlluminationFlags != b.globalIlluminationFlags) return false;
-            if (!a.shaderKeywords.SequenceEqual(b.shaderKeywords)) return false;
-
-            // check the same passes are enabled
-            for (int i=0; i<a.passCount; i++) {
-                if (a.GetShaderPassEnabled(a.GetPassName(i)) != b.GetShaderPassEnabled(b.GetPassName(i))) return false;
+            for (int i = 0; i < a.shader.passCount; i++) {
+                var lightModeValue = a.shader.FindPassTagValue(i, new ShaderTagId("LightMode"));
+                if (!string.IsNullOrEmpty(lightModeValue.name)) {
+                    if (a.GetShaderPassEnabled(lightModeValue.name) != b.GetShaderPassEnabled(lightModeValue.name)) {
+                        return false;
+                    }
+                }
             }
 
-            // Floats
-            string[] afloats = a.GetPropertyNames(MaterialPropertyType.Float);
-            string[] bfloats = b.GetPropertyNames(MaterialPropertyType.Float);
-            if (!afloats.SequenceEqual(bfloats)) return false;
-            if (!afloats.Select(x => a.GetFloat(x)).SequenceEqual(bfloats.Select(x => b.GetFloat(x)))) return false;
+            string[] aFloats = a.GetPropertyNames(MaterialPropertyType.Float);
+            string[] bFloats = b.GetPropertyNames(MaterialPropertyType.Float);
+            if (!aFloats.SequenceEqual(bFloats))
+                return false;
+            if (!aFloats.Select(x => a.GetFloat(x)).SequenceEqual(bFloats.Select(x => b.GetFloat(x))))
+                return false;
 
-            // Integers
-            string[] anums = a.GetPropertyNames(MaterialPropertyType.Int);
-            string[] bnums = b.GetPropertyNames(MaterialPropertyType.Int);
-            if (!anums.SequenceEqual(bnums)) return false;
-            if (!anums.Select(x => a.GetInt(x)).SequenceEqual(bnums.Select(x => b.GetInt(x)))) return false;
+            string[] aInts = a.GetPropertyNames(MaterialPropertyType.Int);
+            string[] bInts = b.GetPropertyNames(MaterialPropertyType.Int);
+            if (!aInts.SequenceEqual(bInts))
+                return false;
+            if (!aInts.Select(x => a.GetInteger(x)).SequenceEqual(bInts.Select(x => b.GetInteger(x))))
+                return false;
 
-            // Vectors (and colours)
-            string[] avectors = a.GetPropertyNames(MaterialPropertyType.Vector);
-            string[] bvectors = b.GetPropertyNames(MaterialPropertyType.Vector);
-            if (!avectors.SequenceEqual(bvectors)) return false;
-            if (!avectors.Select(x => a.GetVector(x)).SequenceEqual(bvectors.Select(x => b.GetVector(x)))) return false;
+            string[] aVectors = a.GetPropertyNames(MaterialPropertyType.Vector);
+            string[] bVectors = b.GetPropertyNames(MaterialPropertyType.Vector);
+            if (!aVectors.SequenceEqual(bVectors))
+                return false;
+            if (!aVectors.Select(x => a.GetVector(x)).SequenceEqual(bVectors.Select(x => b.GetVector(x))))
+                return false;
 
-            // Textures
-            string[] atextures = a.GetPropertyNames(MaterialPropertyType.Texture);
-            string[] btextures = b.GetPropertyNames(MaterialPropertyType.Texture);
-            if (!atextures.SequenceEqual(btextures)) return false;
-            if (!atextures.Select(x => a.GetTexture(x)).SequenceEqual(btextures.Select(x => b.GetTexture(x)))) return false;
+            string[] aTextures = a.GetPropertyNames(MaterialPropertyType.Texture);
+            string[] bTextures = b.GetPropertyNames(MaterialPropertyType.Texture);
+            if (!aTextures.SequenceEqual(bTextures))
+                return false;
+            if (!aTextures.Select(x => a.GetTexture(x)).SequenceEqual(bTextures.Select(x => b.GetTexture(x))))
+                return false;
 
-            // Matrices
-            string[] amatrices = a.GetPropertyNames(MaterialPropertyType.Matrix);
-            string[] bmatrices = b.GetPropertyNames(MaterialPropertyType.Matrix);
-            if (!amatrices.SequenceEqual(bmatrices)) return false;
-            if (!amatrices.Select(x => a.GetMatrix(x)).SequenceEqual(bmatrices.Select(x => b.GetMatrix(x)))) return false;
+            string[] aMatrices = a.GetPropertyNames(MaterialPropertyType.Matrix);
+            string[] bMatrices = b.GetPropertyNames(MaterialPropertyType.Matrix);
+            if (!aMatrices.SequenceEqual(bMatrices))
+                return false;
+            if (!aMatrices.Select(x => a.GetMatrix(x)).SequenceEqual(bMatrices.Select(x => b.GetMatrix(x))))
+                return false;
 
-            // ConstantBuffer and ComputeBuffer aren't present on avatars right?
-
-            // Materials should be matching
             return true;
         }
 
         public int GetHashCode(Material m) {
-            // not a great hash function, but it's enough to work
-            return (
-                m.shader.GetHashCode() ^ 
-                ((m.mainTexture == null) ? 0 : m.mainTexture.GetHashCode()) ^
-                m.renderQueue ^
-                m.color.GetHashCode()
-            );
+            int hash = m.shader.GetHashCode() ^ m.renderQueue;
+            if (m.HasTexture("_MainTex")) {
+                var tex = m.GetTexture("_MainTex");
+                if (tex != null) {
+                    hash ^= tex.GetHashCode();
+                }
+            }
+            if (m.HasProperty("_Color")) {
+                hash ^= m.GetColor("_Color").GetHashCode();
+            }
+            return hash;
         }
     }
 
     private void DeduplicateMaterials()
-    {   
-        // Get all renderers and materials in the hierarchy
+    {
         var allRenderers = GetComponentsInChildren<Renderer>(true);
-        var allUsedMaterials = allRenderers.SelectMany(x => x.sharedMaterials).Distinct().ToArray();
+        var exclusions = GetAllExcludedTransforms();
+        allRenderers = allRenderers.Where(r => !exclusions.Contains(r.transform)).ToArray();
 
-        // group the material assets into groups of identical materials
+        var allUsedMaterials = allRenderers.SelectMany(x => x.sharedMaterials).Where(m => m != null).Distinct().ToArray();
         var materialGroups = allUsedMaterials.GroupBy(x => x, new MaterialAssetComparer()).ToList();
 
-        // Materials are now in groups that the comparer considers identical
-        // though they might be different assets
-
-        // The following block of code will replace all materials in the same group with the first material in the group
-        // this deduplicates them and allows existing logic to merge them
-
+        var deduplicatedMaterialLookup = new Dictionary<Material, Material>();
         foreach (var group in materialGroups) {
-            // this is the material that everything in the group will be set to
             Material finalMaterial = group.Key;
-
-            // exclude the final material from the group
-            var mats = group.Except(new Material[] {finalMaterial}).ToList();
-
-            // count==0 implies that there is only one material in the group
-            if (mats.Count == 0) continue;
-
-            // replace all found materials with the final material
-            foreach (Renderer r in allRenderers) {
-                r.sharedMaterials = r.sharedMaterials.Select(x => mats.Contains(x) ? finalMaterial : x).ToArray();
+            foreach (var mat in group) {
+                deduplicatedMaterialLookup[mat] = finalMaterial;
             }
+        }
+
+        foreach (var renderer in allRenderers) {
+            var materials = renderer.sharedMaterials;
+            for (int i = 0; i < materials.Length; i++) {
+                if (materials[i] != null && deduplicatedMaterialLookup.TryGetValue(materials[i], out var newMaterial)) {
+                    materials[i] = newMaterial;
+                }
+            }
+            renderer.sharedMaterials = materials;
         }
     }
 #endif
