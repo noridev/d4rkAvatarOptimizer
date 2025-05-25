@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.4] - 2025-05-25
+Based on d4rkAvatarOptimizer version: <b>3.10.1</b>
+
+### Changed
+- 기반 d4rkAvatarOptimizer 버전 업데이트 (<small>3.9.10</small> -> **3.10.1**)
+
+---
+
 ## [1.1.3] - 2025-04-05
 Based on d4rkAvatarOptimizer version: <b>3.9.10</b>
 
