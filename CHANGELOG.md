@@ -1,3 +1,12 @@
+## v3.11.0
+### Features
+* Add button to select group of materials that will get merged from the merge preview.
+
+## v3.10.2
+### Bug Fixes
+* No longer prevent meshes from getting merged if none existing material properties are animated. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/pull/151)
+* Don't delete finger collider parents when using `Delete Unused GameObjects`.
+
 ## v3.10.1
 ### Bug Fixes
 * Foot collider transform check now checks if the transform is a child of the avatar as well.

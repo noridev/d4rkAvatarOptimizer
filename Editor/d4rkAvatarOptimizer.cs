@@ -928,6 +928,42 @@ public class d4rkAvatarOptimizer : MonoBehaviour
         if (cache_RendererHaveSameAnimationCurves.TryGetValue((a, b), out var result))
             return result;
         bool IsRelevantBindingForSkinnedMeshMerge(EditorCurveBinding binding) {
+            if(typeof(Renderer).IsAssignableFrom(binding.type) && binding.propertyName.StartsWithSimple("material.")) {
+                // ignore bindings for material properties that do not exist for any materials or material swaps on this renderer
+
+                Renderer renderer = GetTransformFromPath(binding.path)?.GetComponent<Renderer>();
+                if(renderer) {
+                    int materialSlotCount = renderer.sharedMaterials.Length;
+
+                    var swaps = FindAllMaterialSwapMaterials();
+                    string materialProperty = binding.propertyName.Substring("material.".Length).Split('.', 2)[0];
+
+                    bool propertyExists = false;
+
+                    for(int i = 0; i < materialSlotCount && !propertyExists; ++i) {
+                        // check the default materials
+                        if(renderer.sharedMaterials[i] != null && renderer.sharedMaterials[i].HasProperty(materialProperty)) {
+                            propertyExists = true;
+                            break;
+                        }
+
+                        // check the material swaps
+                        if(swaps.TryGetValue((binding.path, i), out var mats)) {
+                            foreach(Material mat in mats) {
+                                if(mat != null && mat.HasProperty(materialProperty)) {
+                                    propertyExists = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    // if the property does not exist, this binding is not relevent
+                    if(!propertyExists)
+                        return false;
+                }
+            }
+            
             if (withNaNimation && CanUseNaNimationOnMesh(binding.path)) {
                 if (typeof(Renderer).IsAssignableFrom(binding.type))
                     return !binding.propertyName.StartsWithSimple("blendShape.") && binding.propertyName != "m_Enabled";
@@ -5225,6 +5261,20 @@ public class d4rkAvatarOptimizer : MonoBehaviour
             }
             used.UnionWith(FindReferencedTransforms(c));
         }
+
+        // the vrc finger colliders depend on their relative position to their parent, so we need to keep their parents around too
+        var avDescriptor = GetComponent<VRCAvatarDescriptor>();
+        var fingerColliders = new List<VRCAvatarDescriptor.ColliderConfig>() {
+            avDescriptor.collider_fingerIndexL,
+            avDescriptor.collider_fingerIndexR,
+            avDescriptor.collider_fingerMiddleL,
+            avDescriptor.collider_fingerMiddleR,
+            avDescriptor.collider_fingerRingL,
+            avDescriptor.collider_fingerRingR,
+            avDescriptor.collider_fingerLittleL,
+            avDescriptor.collider_fingerLittleR,
+        }.Select(c => c.transform).Where(t => t != null);
+        used.UnionWith(fingerColliders.Select(c => c.parent).Where(t => t != null));
 
         used.UnionWith(FindAllGameObjectTogglePaths().Select(p => GetTransformFromPath(p)).Where(t => t != null));
 
