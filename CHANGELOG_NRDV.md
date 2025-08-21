@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.x.x] - 20xx-xx-xx
+Based on d4rkAvatarOptimizer version: <b>3.11.0</b>
+
+### Fixed
+- Unity 에디터를 종료할 때 충돌이 발생할 수 있음
+
+---
+
 ## [1.1.8] - 2025-08-20
 Based on d4rkAvatarOptimizer version: <b>3.11.0</b>
 

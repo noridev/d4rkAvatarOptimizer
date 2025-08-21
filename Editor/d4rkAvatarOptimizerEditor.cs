@@ -210,11 +210,18 @@ public class d4rkAvatarOptimizerEditor : Editor
         foreach (var matched in MergedMaterialPreview)
         {
             var renderers = matched.SelectMany(m => m).Select(slot => slot.renderer).Distinct().ToArray();
+            if (renderers == null || renderers.Length == 0)
+                continue;   
+            if (renderers[0] == null)
+                continue; 
             if (renderers.Any(r => r is SkinnedMeshRenderer) || renderers.Length > 1)
             {
                 optimizedSkinnedMeshCount++;
                 if (exclusions.Contains(renderers[0].transform))
-                    optimizedTotalMaterialCount += renderers[0].GetSharedMesh().subMeshCount;
+                {
+                    var sharedMesh = renderers[0].GetSharedMesh();
+                    optimizedTotalMaterialCount += sharedMesh != null ? sharedMesh.subMeshCount : 0;
+                }
                 else
                     optimizedTotalMaterialCount += matched.Count;
             }
