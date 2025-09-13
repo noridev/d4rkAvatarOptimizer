@@ -1,3 +1,19 @@
+## v3.12.0
+### Features
+* Several upgrades to the shader optimizer:
+  * Add option for shaders to explicitly mark themselves as incompatible by adding the comment `//d4rkAO:incompatible_shader`. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues/159)
+  * Add option for shaders to mark properties as required constant by adding the comment `//d4rkAO:require_constant(_PropertyName)`.
+  * Add support for `isAnimated` && `isNotAnimated` ifex conditions. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues/161)
+  * Inline replace constant values in shader code when using any `//ifex` or `//d4rkAO:require_constant(_PropertyName)` comments.
+  * Add define of `OPTIMIZER_ENABLED` to generated shaders if they declare any required constant properties.
+
+### Bug Fixes
+* Fix material instancing flag not being preserved when creating optimized materials. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues/162)
+* Fix multi condition toggles not working properly when using `Optimize FX Layer`.
+  * This was a regression bug from v3.11.0 when adding more toggle support.
+* Fix mesh baking sometimes altering the looks of meshes when pose didn't match model bind pose. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues/158)
+  * This comes at the cost of not re-parenting non moving bones to the first moving parent when using `Delete Unused GameObjects`.
+
 ## v3.11.0
 ### Features
 * Add button to select group of materials that will get merged from the merge preview.

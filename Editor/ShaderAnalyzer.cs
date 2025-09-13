@@ -118,6 +118,8 @@ namespace d4rkpl4y3r.AvatarOptimizer
         public HashSet<string> shaderFeatureKeyWords = new HashSet<string>();
         public HashSet<string> ifexParameters = new HashSet<string>();
         public HashSet<string> unableToParseIfexStatements = new HashSet<string>();
+        public List<string> unknownOptimizerComments = new List<string>();
+        public HashSet<string> requiredConstantProperties = new HashSet<string>();
 
         public bool CanMerge()
         {
@@ -319,50 +321,62 @@ namespace d4rkpl4y3r.AvatarOptimizer
             return -1;
         }
 
-        public static List<(string name, bool notEquals, float value)> ParseIfexConditions(string line)
+        public enum IfexConditionType
         {
-            var conditions = new List<(string name, bool notEquals, float value)>();
+            Equals,
+            NotEquals,
+            IsNotAnimated,
+            IsAnimated
+        }
+        public static List<(string propertyName, IfexConditionType conditionType, float value)> ParseIfexConditions(string line)
+        {
+            var conditions = new List<(string propertyName, IfexConditionType conditionType, float value)>();
             int index = 5;
-            while (index < line.Length) {
-                while (index < line.Length && char.IsWhiteSpace(line[index]))
-                    index++;
+            void SkipWhitespace() { while (index < line.Length && char.IsWhiteSpace(line[index])) index++; }
+            while (index < line.Length)
+            {
+                SkipWhitespace();
                 if (index == line.Length)
                     break;
-                if (line[index] == '&' && line[index + 1] == '&') {
+                if (line[index] == '&' && line[index + 1] == '&')
                     index += 2;
-                }
-                while (index < line.Length && char.IsWhiteSpace(line[index]))
-                    index++;
+                SkipWhitespace();
                 var name = ShaderAnalyzer.ParseIdentifierAndTrailingWhitespace(line, ref index);
-                if (name == null) {
+                if (name == null)
                     return null;
+                if (name == "isNotAnimated" || name == "isAnimated")
+                {
+                    var conditionType = name == "isNotAnimated" ? IfexConditionType.IsNotAnimated : IfexConditionType.IsAnimated;
+                    if (line[index++] != '(')
+                        return null;
+                    SkipWhitespace();
+                    name = ShaderAnalyzer.ParseIdentifierAndTrailingWhitespace(line, ref index);
+                    if (name == null)
+                        return null;
+                    if (line[index++] != ')')
+                        return null;
+                    conditions.Add((name, conditionType, 0f));
+                    continue;
                 }
-                while (index < line.Length && char.IsWhiteSpace(line[index]))
-                    index++;
-                if (index == line.Length) {
+                SkipWhitespace();
+                if (index == line.Length)
                     return null;
-                }
                 bool notEquals = line[index] == '!';
-                if ((line[index] != '!' && line[index] != '=') || line[index + 1] != '=') {
+                if ((line[index] != '!' && line[index] != '=') || line[index + 1] != '=')
                     return null;
-                }
                 index += 2;
-                while (index < line.Length && char.IsWhiteSpace(line[index]))
-                    index++;
-                if (index == line.Length) {
+                SkipWhitespace();
+                if (index == line.Length)
                     return null;
-                }
                 int valueStart = index;
                 int valueEnd = index;
-                while (valueEnd < line.Length && char.IsDigit(line[valueEnd])) {
+                while (valueEnd < line.Length && char.IsDigit(line[valueEnd]))
                     valueEnd++;
-                }
-                if (valueStart == valueEnd) {
+                if (valueStart == valueEnd)
                     return null;
-                }
                 index = valueEnd;
                 var value = float.Parse(line.Substring(valueStart, valueEnd - valueStart));
-                conditions.Add((name, notEquals, value));
+                conditions.Add((name, notEquals ? IfexConditionType.NotEquals : IfexConditionType.Equals, value));
             }
             return conditions;
         }
@@ -478,9 +492,28 @@ namespace d4rkpl4y3r.AvatarOptimizer
                     return false; 
                 }
             }
+            var trimWhiteSpaceChars = new char[] { ' ', '\t', '\r', '\n' };
+            void ParseOptimizerComment(string commentLine)
+            {
+                var commands = commentLine.Split(':');
+                foreach (var command in commands)
+                {
+                    var cmd = command.Trim(trimWhiteSpaceChars);
+                    if (cmd == "incompatible_shader")
+                    {
+                        throw new ParserException("Shader is explicitly marked as incompatible.");
+                    }
+                    if (cmd.StartsWithSimple("require_constant(") && cmd.EndsWith(")"))
+                    {
+                        var paramName = cmd.Substring("require_constant(".Length, cmd.Length - "require_constant(".Length - 1).Trim(trimWhiteSpaceChars);
+                        parsedShader.requiredConstantProperties.Add(paramName);
+                        continue;
+                    }
+                    parsedShader.unknownOptimizerComments.Add(cmd);
+                }
+            }
             parsedShader.text[fileID] = processedLines;
             alreadyIncludedThisPass.Add(fileID);
-            var trimWhiteSpaceChars = new char[] { ' ', '\t', '\r', '\n' };
             for (int lineIndex = 0; lineIndex < rawLines.Length; lineIndex++)
             {
                 string trimmedLine = rawLines[lineIndex].Trim(trimWhiteSpaceChars);
@@ -491,22 +524,26 @@ namespace d4rkpl4y3r.AvatarOptimizer
                 {
                     trimmedLine = trimmedLine.Substring(0, trimmedLine.Length - 1).TrimEnd(trimWhiteSpaceChars) + " " + rawLines[++lineIndex].Trim(trimWhiteSpaceChars);
                 }
-                if (trimmedLine.Length >= 6 && trimmedLine[0] == '/' && trimmedLine[1] == '/')
+                if (trimmedLine.StartsWithSimple("//"))
                 {
-                    if (trimmedLine[2] == 'i' && trimmedLine[3] == 'f' && trimmedLine[4] == 'e' && trimmedLine[5] == 'x')
+                    if (trimmedLine.StartsWithSimple("ifex", 2))
                     {
                         string ifexLine = $"#{trimmedLine.Substring(2)}";
                         processedLines.Add(ifexLine);
                         var conditions = ParseIfexConditions(ifexLine);
                         if (conditions != null) {
-                            conditions.ForEach(p => parsedShader.ifexParameters.Add(p.name));
+                            conditions.ForEach(p => parsedShader.ifexParameters.Add(p.propertyName));
                         } else {
                             parsedShader.unableToParseIfexStatements.Add(trimmedLine);
                         }
                     }
-                    else if (trimmedLine.Length > 6 && trimmedLine[2] == 'e' && trimmedLine[3] == 'n' && trimmedLine[4] == 'd' && trimmedLine[5] == 'e' && trimmedLine[6] == 'x')
+                    else if (trimmedLine.StartsWithSimple("endex", 2))
                     {
                         processedLines.Add("#endex");
+                    }
+                    else if (trimmedLine.StartsWithSimple("d4rkAO:", 2))
+                    {
+                        ParseOptimizerComment(trimmedLine.Substring("//d4rkAO:".Length));
                     }
                     continue;
                 }
@@ -545,6 +582,10 @@ namespace d4rkpl4y3r.AvatarOptimizer
                     }
                     if (trimmedLine[i + 1] == '/')
                     {
+                        if (trimmedLine.StartsWithSimple("d4rkAO:", i + 2))
+                        {
+                            ParseOptimizerComment(trimmedLine.Substring(i + 2 + "d4rkAO:".Length));
+                        }
                         trimmedLine = trimmedLine.Substring(0, i).TrimEnd(trimWhiteSpaceChars);
                         break;
                     }
@@ -1430,11 +1471,21 @@ namespace d4rkpl4y3r.AvatarOptimizer
                     pass.startLineIndex += 3;
                 }
             }
-            foreach (var ifexPropName in parsedShader.ifexParameters)
+            if (parsedShader.requiredConstantProperties.Count == 0)
             {
-                if (parsedShader.propertyTable.TryGetValue(ifexPropName, out var prop))
+                foreach (var ifexPropName in parsedShader.ifexParameters)
                 {
-                    prop.shaderLabParams.Add("ifex");
+                    if (parsedShader.propertyTable.TryGetValue(ifexPropName, out var prop))
+                    {
+                        prop.shaderLabParams.Add("ifex");
+                    }
+                }
+            }
+            foreach (var requiredConstantProperty in parsedShader.requiredConstantProperties)
+            {
+                if (parsedShader.propertyTable.TryGetValue(requiredConstantProperty, out var prop))
+                {
+                    prop.shaderLabParams.Add("require_constant");
                 }
             }
             foreach (var prop in parsedShader.properties)
@@ -1555,6 +1606,8 @@ namespace d4rkpl4y3r.AvatarOptimizer
         private int curlyBraceDepth = 0;
         private string sanitizedMaterialName;
         private bool stripShadowVariants = false;
+        private bool inlineReplaceConstants = false;
+        private Dictionary<string, string> constantPropertyValues = new Dictionary<string, string>();
         private OptimizedShader optimizedShader = new OptimizedShader();
 
         private ShaderOptimizer() {}
@@ -1611,6 +1664,15 @@ namespace d4rkpl4y3r.AvatarOptimizer
             optimizer.texturesToReplaceCalls = new HashSet<string>(
                 optimizer.texturesToMerge.Union(optimizer.texturesToNullCheck.Keys));
             optimizer.optimizedShader.originalShader = source;
+            optimizer.inlineReplaceConstants = source.ifexParameters.Count > 0 || source.requiredConstantProperties.Count > 0;
+            foreach (var staticValues in optimizer.staticPropertyValues)
+            {
+                if (optimizer.animatedPropertyValues.ContainsKey(staticValues.Key))
+                    continue;
+                if (optimizer.arrayPropertyValues.ContainsKey(staticValues.Key))
+                    continue;
+                optimizer.constantPropertyValues[staticValues.Key] = $"({staticValues.Value})";
+            }
             try
             {
                 optimizer.Run();
@@ -1626,6 +1688,37 @@ namespace d4rkpl4y3r.AvatarOptimizer
                 Thread.CurrentThread.CurrentUICulture = oldUICulture;
             }
             return optimizer.optimizedShader;
+        }
+
+        private string ReplaceConstants(string line)
+        {
+            if (!inlineReplaceConstants || line.Length == 0 || line[0] == '#')
+            {
+                return line;
+            }
+            var sb = new StringBuilder();
+            bool inIdentifier = ShaderAnalyzer.IsIdentifierLetter(line[0]);
+            bool didReplaceSomething = false;
+            int currentChunkStart = 0;
+            for (int i = 1; i <= line.Length; i++)
+            {
+                if (i == line.Length || ShaderAnalyzer.IsIdentifierLetter(line[i]) != inIdentifier)
+                {
+                    var chunk = line.Substring(currentChunkStart, i - currentChunkStart);
+                    if (inIdentifier && constantPropertyValues.TryGetValue(chunk, out var replacement))
+                    {
+                        sb.Append(replacement);
+                        didReplaceSomething = true;
+                    }
+                    else
+                    {
+                        sb.Append(chunk);
+                    }
+                    currentChunkStart = i;
+                    inIdentifier = !inIdentifier;
+                }
+            }
+            return didReplaceSomething ? sb.ToString() : line;
         }
 
         private void InjectArrayPropertyInitialization()
@@ -1919,6 +2012,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
                 {
                     line = Regex.Replace(line, $"({inParam.name}\\s*\\.\\s*{vertexInUv0Member})([^0-9a-zA-Z])", $"$1{vertexInUv0EndSwizzle}$2");
                 }
+                line = ReplaceConstants(line);
                 originalVertexShader?.Add(line);
                 if (line == "}")
                 {
@@ -2034,6 +2128,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
             {
                 ParseAndEvaluateIfex(source, ref sourceLineIndex, output);
                 line = source[sourceLineIndex];
+                line = ReplaceConstants(line);
                 if (line == "}")
                 {
                     output.Add(line);
@@ -2204,6 +2299,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
             {
                 ParseAndEvaluateIfex(source, ref sourceLineIndex, output);
                 string line = source[sourceLineIndex];
+                line = ReplaceConstants(line);
                 if (line[0] == '#')
                 {
                     line = PartialEvalPreprocessorLine(source, ref sourceLineIndex);
@@ -2312,6 +2408,22 @@ namespace d4rkpl4y3r.AvatarOptimizer
             target.Add($"#pragma warning (disable : 4008) // A floating point division by zero occurred.");
         }
 
+        private void InjectOptimizerDefines()
+        {
+            if (parsedShader.requiredConstantProperties.Count == 0)
+                return;
+            var currentKnownDefines = knownDefines.Peek();
+            output.Add("#define OPTIMIZER_ENABLED 1");
+            currentKnownDefines["OPTIMIZER_ENABLED"] = (true, 1);
+            foreach (var prop in poiUsedPropertyDefines)
+            {
+                if (!prop.Value)
+                    continue;
+                output.Add($"#define {prop.Key} 1");
+                currentKnownDefines[prop.Key] = (true, 1);
+            }
+        }
+
         private void InjectPropertyArrays()
         {
             pragmaOutput.Add($"#pragma skip_variants {string.Join(" ", SkippedShaderVariants)}");
@@ -2414,7 +2526,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
                     varName = "_MainTexButNotQuiteSoThatUnityDoesntCry_ST";
                 output.Add("static " + type + " " + varName + " = " + value + ";");
             }
-            foreach(var keyword in setKeywords.Where(k => currentPass.shaderFeatureKeyWords.Contains(k)))
+            foreach (var keyword in setKeywords.Where(k => currentPass.shaderFeatureKeyWords.Contains(k)))
             {
                 output.Add($"#define {keyword} 1");
             }
@@ -2449,7 +2561,8 @@ namespace d4rkpl4y3r.AvatarOptimizer
             foreach (var texName in texturesToReplaceCalls)
             {
                 string nullCheck = null;
-                if (texturesToNullCheck.TryGetValue(texName, out string textureDefaultValue)) {
+                if (texturesToNullCheck.TryGetValue(texName, out string textureDefaultValue))
+                {
                     nullCheck = $"if (!shouldSample{texName}) return {textureDefaultValue};";
                 }
 
@@ -3103,7 +3216,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
                     }
                     else
                     {
-                        output.Add(line);
+                        output.Add(ReplaceConstants(line));
                     }
                 }
             }
@@ -3141,24 +3254,48 @@ namespace d4rkpl4y3r.AvatarOptimizer
             var outputString = $"// #ifex ";
             var firstCondition = true;
             foreach (var condition in conditions) {
-                var name = condition.name;
-                var notEquals = condition.notEquals;
-                var compValue = condition.value;
-                if (!staticPropertyValues.TryGetValue(name, out var valueString)) {
-                    lineIndex++;
-                    debugOutput?.Add($"// #ifex {name} not found in static properties");
-                    ParseAndEvaluateIfex(lines, ref lineIndex, debugOutput);
-                    return;
+                var propertyName = condition.propertyName;
+                bool isStaticValue = staticPropertyValues.TryGetValue(propertyName, out var staticValue);
+                bool isAnimated = animatedPropertyValues.ContainsKey(propertyName);
+                bool isArrayProperty = arrayPropertyValues.ContainsKey(propertyName);
+                bool isValueConstant = isStaticValue && !isAnimated && !isArrayProperty;
+                outputString += $"{(firstCondition ? "" : " && ")}";
+                switch (condition.conditionType)
+                {
+                    case ShaderAnalyzer.IfexConditionType.IsAnimated:
+                    case ShaderAnalyzer.IfexConditionType.IsNotAnimated:
+                        bool isAnimatedCheck = condition.conditionType == ShaderAnalyzer.IfexConditionType.IsAnimated;
+                        outputString += $"{(isAnimatedCheck ? "isAnimated" : "isNotAnimated")}({propertyName})({isStaticValue},{isAnimated},{isArrayProperty})";
+                        if (isValueConstant == isAnimatedCheck)
+                        {
+                            lineIndex++;
+                            debugOutput?.Add(outputString + ", FALSE");
+                            ParseAndEvaluateIfex(lines, ref lineIndex, debugOutput);
+                            return;
+                        }
+                        break;
+                    case ShaderAnalyzer.IfexConditionType.Equals:
+                    case ShaderAnalyzer.IfexConditionType.NotEquals:
+                        if (!isValueConstant)
+                        {
+                            lineIndex++;
+                            debugOutput?.Add($"// #ifex {propertyName} not a constant value");
+                            ParseAndEvaluateIfex(lines, ref lineIndex, debugOutput);
+                            return;
+                        }
+                        var value = float.Parse(staticValue);
+                        var notEquals = condition.conditionType == ShaderAnalyzer.IfexConditionType.NotEquals;
+                        outputString += $"{propertyName}({value}) {(notEquals ? '!' : '=')}= {condition.value}";
+                        if ((condition.value == value) == notEquals)
+                        {
+                            lineIndex++;
+                            debugOutput?.Add(outputString + ", FALSE");
+                            ParseAndEvaluateIfex(lines, ref lineIndex, debugOutput);
+                            return;
+                        }
+                        break;
                 }
-                var value = float.Parse(valueString);
-                outputString += $"{(firstCondition ? "" : " && ")}{name}({value}) {(notEquals ? '!' : '=')}= {compValue}";
                 firstCondition = false;
-                if ((compValue != value) ^ notEquals) {
-                    lineIndex++;
-                    debugOutput?.Add(outputString + ", FALSE");
-                    ParseAndEvaluateIfex(lines, ref lineIndex, debugOutput);
-                    return;
-                }
             }
 
             // skip all code until matching #endex
@@ -3386,6 +3523,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
                     texturesToCallSoTheSamplerDoesntDisappear.Clear();
                     pragmaOutput = output;
                     output = new List<string>();
+                    InjectOptimizerDefines();
                     InjectPropertyArrays();
                     foreach (var keyword in currentPass.shaderFeatureKeyWords)
                     {
