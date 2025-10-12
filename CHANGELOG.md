@@ -1,3 +1,23 @@
+## v3.12.4
+### Bug Fixes
+* Strip material swap bindings that point to slots that don't exist on the renderer.
+  * Merging meshes could result in those slots now existing and getting overwritten by the material swap animation.
+
+## v3.12.3
+### Changes
+* Add ignore warning 3554 to generated shaders (The attribute is unknown or invalid for the specified statement).
+  * These were caused by `[branch]` attributes on if statements that get constant folded.
+
+### Bug Fixes
+* Fix errors in constant folding if value is an exact integer.
+
+## v3.12.2
+### Bug Fixes
+* Fix shader error when a material has an apostrophe (`'`) in its name.
+* Fix optimizer stripping shadow variants from materials with render queue 2500.
+* Fix meshes with negative scale getting merged with meshes with positive scale.
+  * This caused the shader property `SV_IsFrontFace` to get flipped for parts of the merged mesh.
+
 ## v3.12.1
 ### Bug Fixes
 * Add support for `[DoNotLock]` tag in shaders to prevent them from being inline replaced as constants.

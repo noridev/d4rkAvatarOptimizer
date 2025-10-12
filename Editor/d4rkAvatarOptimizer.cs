@@ -764,6 +764,15 @@ public class d4rkAvatarOptimizer : MonoBehaviour
         return false;
     }
 
+    private bool RenderersHaveSameRootBoneScaleSign(Renderer a, Renderer b)
+    {
+        if (a == null || b == null)
+            return true;
+        var scaleA = a.GetRootBone().lossyScale;
+        var scaleB = b.GetRootBone().lossyScale;
+        return Mathf.Sign(scaleA.x) == Mathf.Sign(scaleB.x) && Mathf.Sign(scaleA.y) == Mathf.Sign(scaleB.y) && Mathf.Sign(scaleA.z) == Mathf.Sign(scaleB.z);
+    }
+
     private bool CanCombineRendererWith(List<Renderer> list, Renderer candidate)
     {
         if (!MergeSkinnedMeshes)
@@ -773,6 +782,8 @@ public class d4rkAvatarOptimizer : MonoBehaviour
         if (list[0].shadowCastingMode != candidate.shadowCastingMode)
             return false;
         if (list[0].receiveShadows != candidate.receiveShadows)
+            return false;
+        if (!RenderersHaveSameRootBoneScaleSign(list[0], candidate))
             return false;
         bool OneOfParentsHasGameObjectToggleThatTheOthersArentChildrenOf(Transform t, string[] otherPaths)
         {
@@ -1505,6 +1516,12 @@ public class d4rkAvatarOptimizer : MonoBehaviour
         foreach (var binding in AnimationUtility.GetObjectReferenceCurveBindings(clip))
         {
             var curve = AnimationUtility.GetObjectReferenceCurve(clip, binding);
+            if (GetAllMaterialSwapBindingsToRemove().Contains(binding))
+            {
+                lastUnusedKeyframeTime = Mathf.Max(curve.Length > 0 ? curve[^1].time : 0, lastUnusedKeyframeTime);
+                changed = true;
+                continue;
+            }
             for (int i = 0; i < curve.Length; i++)
             {
                 var oldMat = curve[i].value as Material;
@@ -2223,10 +2240,10 @@ public class d4rkAvatarOptimizer : MonoBehaviour
                 uselessLayers.Add(i);
                 continue;
             }
-            var layerBindings = stateMachine.EnumerateAllStates()
-                .SelectMany(s => s.motion == null ? new AnimationClip[0] : s.motion.EnumerateAllClips()).Distinct()
-                .SelectMany(c => AnimationUtility.GetCurveBindings(c).Concat(AnimationUtility.GetObjectReferenceCurveBindings(c)));
-            if (layerBindings.All(b => !IsPossibleBinding(b)))
+            var clips = stateMachine.EnumerateAllStates()
+                .SelectMany(s => s.motion == null ? new AnimationClip[0] : s.motion.EnumerateAllClips()).Distinct().ToList();
+            var layerBindings = clips.SelectMany(c => AnimationUtility.GetCurveBindings(c).Concat(AnimationUtility.GetObjectReferenceCurveBindings(c))).Distinct();
+            if (layerBindings.All(b => IsMaterialSwapBinding(b) ? ShouldRemoveMaterialSwapBinding(b) : !IsPossibleBinding(b)))
             {
                 uselessLayers.Add(i);
                 continue;
@@ -2478,11 +2495,11 @@ public class d4rkAvatarOptimizer : MonoBehaviour
         if (!DisablePhysBonesWhenUnused)
             return result;
         var physBoneDependencies = FindAllPhysBoneDependencies();
-        foreach(var dependencies in physBoneDependencies.Values)
+        foreach (var dependencies in physBoneDependencies.Values)
         {
             dependencies.RemoveWhere(o => o == null);
         }
-        foreach(var entry in physBoneDependencies)
+        foreach (var entry in physBoneDependencies)
         {
             if (entry.Key != null && entry.Value.Count(o => !(o is AnimatorController)) == 1 && entry.Value.First(o => !(o is AnimatorController)) is SkinnedMeshRenderer target)
             {
@@ -2497,6 +2514,42 @@ public class d4rkAvatarOptimizer : MonoBehaviour
         return result;
     }
 
+    private bool IsMaterialSwapBinding(EditorCurveBinding binding)
+    {
+        return typeof(Renderer).IsAssignableFrom(binding.type)
+            && binding.propertyName.StartsWithSimple("m_Materials.Array.data[");
+    }
+
+    private Dictionary<EditorCurveBinding, bool> cache_MaterialSwapBindingsToRemove = null;
+    private bool ShouldRemoveMaterialSwapBinding(EditorCurveBinding binding)
+    {
+        if (cache_MaterialSwapBindingsToRemove == null)
+            cache_MaterialSwapBindingsToRemove = new Dictionary<EditorCurveBinding, bool>();
+        if (cache_MaterialSwapBindingsToRemove.TryGetValue(binding, out var result))
+            return result;
+        int slot = int.Parse(binding.propertyName.Substring("m_Materials.Array.data[".Length, binding.propertyName.Length - "m_Materials.Array.data[]".Length));
+        var renderer = GetTransformFromPath(binding.path)?.GetComponent<Renderer>();
+        return cache_MaterialSwapBindingsToRemove[binding]
+            = renderer == null || renderer.sharedMaterials.Length <= slot;
+    }
+
+    private HashSet<EditorCurveBinding> cache_GetAllMaterialSwapBindingsToRemove = null;
+    private HashSet<EditorCurveBinding> GetAllMaterialSwapBindingsToRemove()
+    {
+        if (cache_GetAllMaterialSwapBindingsToRemove != null)
+            return cache_GetAllMaterialSwapBindingsToRemove;
+        var result = new HashSet<EditorCurveBinding>();
+        if (cache_MaterialSwapBindingsToRemove != null)
+        {
+            foreach (var entry in cache_MaterialSwapBindingsToRemove)
+            {
+                if (entry.Value)
+                    result.Add(entry.Key);
+            }
+        }
+        return cache_GetAllMaterialSwapBindingsToRemove = result;
+    }
+
     private Dictionary<(string path, int index), HashSet<Material>> cache_FindAllMaterialSwapMaterials;
     public Dictionary<(string path, int index), HashSet<Material>> FindAllMaterialSwapMaterials()
     {
@@ -2507,12 +2560,13 @@ public class d4rkAvatarOptimizer : MonoBehaviour
         {
             foreach (var binding in AnimationUtility.GetObjectReferenceCurveBindings(clip))
             {
-                if (!typeof(Renderer).IsAssignableFrom(binding.type)
-                    || !binding.propertyName.StartsWithSimple("m_Materials.Array.data["))
+                if (!IsMaterialSwapBinding(binding))
                     continue;
                 int start = binding.propertyName.IndexOf('[') + 1;
                 int end = binding.propertyName.IndexOf(']') - start;
                 int slot = int.Parse(binding.propertyName.Substring(start, end));
+                if (ShouldRemoveMaterialSwapBinding(binding))
+                    continue;
                 var index = (binding.path, slot);
                 var curve = AnimationUtility.GetObjectReferenceCurve(clip, binding);
                 var curveMaterials = curve.Select(c => c.value as Material).Where(m => m != null).Distinct().ToList();
@@ -3490,9 +3544,13 @@ public class d4rkAvatarOptimizer : MonoBehaviour
                 materials[i] = source[0];
                 continue;
             }
-            stripShadowVariants[i] = source[0].renderQueue >= 2500;
+            
+            char[] invalidChars = Path.GetInvalidFileNameChars()
+                .Append('\'') // imagine fxc being able to handle all legal filenames smh
+                .ToArray();
+            stripShadowVariants[i] = source[0].renderQueue > 2500;
             sanitizedMaterialNames[i] = "s_" + Path.GetFileNameWithoutExtension(parsedShader[i].filePath)
-                + " " + string.Join("_", source[0].name.Split(Path.GetInvalidFileNameChars(), System.StringSplitOptions.RemoveEmptyEntries));
+                + " " + string.Join("_", source[0].name.Split(invalidChars, System.StringSplitOptions.RemoveEmptyEntries));
             texturesToMerge[i] = new HashSet<string>();
             propertyTextureArrayIndex[i] = new Dictionary<string, int>();
             arrayPropertyValues[i] = new Dictionary<string, (string type, List<string> values)>();
