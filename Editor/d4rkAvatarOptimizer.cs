@@ -28,7 +28,7 @@ using BlendableLayer = VRC.SDKBase.VRC_AnimatorLayerControl.BlendableLayer;
 #endif
 
 [HelpURL("https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/blob/main/README.md")]
-[AddComponentMenu("d4rk Avatar Optimizer")]
+[AddComponentMenu("NoriDev - d4rk Avatar Optimizer")]
 public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
 {
     #region Settings
