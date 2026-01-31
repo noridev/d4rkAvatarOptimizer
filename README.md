@@ -2,8 +2,8 @@
 d4rkpl4y3r's VRChat avatar 3.0 optimizer that aims to reduce skinned mesh & material count.
 
 ## How to Use
-1. Add the d4rkAvatarOptimizer component to your avatar root. It should go on the same object that your VRC Avatar Descriptor is on.
-2. Upload the avatar to vrc. The optimizations will be applied before upload automatically with the default settings.
+1. Add the d4rkAvatarOptimizer component to your avatar.
+2. Upload the avatar to VRChat. The optimizations will be applied before upload automatically with the default settings.
 
 Alternatively you can click the "Create Optimized Copy" button to create a new avatar with optimized materials and meshes. That way you can test the optimized version in editor to validate it works properly before uploading it. If everything works correctly you can then upload that optimized copy.
 
@@ -17,21 +17,34 @@ To install the optimizer with VCC you need to add the url `https://vpm.noridev.m
 
 After that you can add and update the optimizer like any other packages in your VCC projects.
 
+## Settings Recommendation
+* Your avatar is over 150k triangles or a lot of materials
+  * Use the "Basic" preset
+  * Shader and NaNimation toggles should be avoided as merging too many meshes could cause performance regressions
+* Your avatar is under 150k triangles and a moderate amount of materials
+  * Use the "Shader Toggles" preset
+  * If your shaders are supported shaders like Poiyomi
+    * Disable NaNimation toggles
+    * Check if your avatar doesn't show anything unwanted with shaders blocked  
+In-game, open the action menu (the round one) -> Options -> Avatar -> Fallback Shaders
+  * If anything in-game looks off, fall back to the "Basic" preset
+
 ## Presets
 ### Basic
 This preset only uses optimizations that don't affect the behavior of the avatar.
-* Removes unused components and blendshapes & bones from skinned meshes
-* Bakes non-animated blend shapes into the mesh
+* Removes unused components, blend shapes & bones from skinned meshes
+* Bakes non animated blend shapes into the mesh
 * Merges all skinned meshes that are always animated in the same way
 * Merges material slots that use the same material
-* Merges toggles in the FXLayer into a direct blend tree
+  * Slots affected by material swap animations are not merged
+* Merges toggles in the FX Layer into a direct blend tree
 * Merges blend shapes that are always animated in the same ratio to each other
 ### Shader Toggles
 This preset uses all the above & some new optimizations.  
 For this mode you should keep shaders unlocked as it can allow for more merging.  
 * Merges meshes even if they are animated/toggled differently by injecting logic into the shaders
 * Merged materials with the same shader even if their properties differ
-* Applies a generalized version of "lock in" to the new shaders
+* Applies a generalized version of "lock in" to the new shaders  
 Due to the added shader logic this preset will slightly increase the GPU cost of the avatar as a trade off for less draw calls.
 
 Expect the following behavior changes (reduced due to NaNimation toggles):
@@ -40,7 +53,6 @@ Expect the following behavior changes (reduced due to NaNimation toggles):
 * With blocked shaders all merged meshes that now rely on shader toggles are always visible
   * Make sure DPS/TPS penetrators don't show up! The optimizer tries to detect and exclude them from shader toggles. If it fails you need to exclude them manually
 ### Full
-This preset uses all optimizations I use for my own avatars.  
 Some of the settings used here compromise quality of the avatar heavily when animations/shaders are blocked.  
 It has some more experimental & some behavior changing ones. Testing that your avatar still works as intended is very needed in this mode. If it doesn't switch to a lower optimization preset.
 
@@ -66,7 +78,7 @@ There are also some settings to tweak the optimization. You can read about their
 
 ![Example Screenshot](./Documentation~/img/example0.png)
 ## Apply on Upload
-Automatically applies the optimizer to the avatar before uploading it to vrc. This is non-destructive, the avatar in your scene will stay as it is.
+Automatically applies the optimizer to the avatar before uploading it to VRChat. This is non destructive, the avatar in your scene will stay as it is.
 ## Write Properties as Static Values
 This is very similar to what some shaders call locking in or baking. If you use this option you should disable the locking in or baking feature of your shader.
 
@@ -136,7 +148,7 @@ If you care about your avatar looking ok with disabled shaders you should disabl
 This option tries to merge blend shapes that always get animated in the same ratio.  
 For example you have two animations. The first animates `A` to 100, `B` to 50 and `C` to 100. The second animates `A` to 50, `B` to 25 and `D` to 100. In this case the optimizer would merge `A` and `B` in a 2:1 ratio as they are always animated in that ratio.
 ## Optimize FX Layer
-Deletes all layers in the FXLayer that are considered useless:
+Deletes all layers in the FX Layer that are considered useless:
   * Has no states or sub state machines.
   * Has 0 weight and is not affected by any layer weight control and has no state behaviours.
   * Has no state behaviours and only animates bindings that don't exist.
@@ -158,7 +170,7 @@ Multi toggles are layers that:
   * No state has transitions.
   * For each \[0, n\) there is one any state transition that points to one unique state.
   * All any state transitions have only one int equals condition with the value of the state index. They all have to use the same int parameter.
-  * The int parameter can't be used with a not equals condition in any transition condition anywhere in the fxlayer.
+  * The int parameter can't be used with a not equals condition in any transition condition anywhere in the FX Layer.
 ## Combine Motion Time Approximation
 This tries to combine layers that have a single motion time state into the direct blend tree.  
 By default it samples the original motion time at the snapping points of a radial puppet (0, 25, 50, 75, 100) and then uses those samples to approximate the motion time with a 1D blend tree.  
@@ -174,7 +186,7 @@ When enabled the optimizer will keep the blend shapes that are used by MMD anima
 * Deletes all phys bones whose dependencies got deleted in the previous step.
 * Deletes phys bone colliders that are not referenced by any used phys bone components.
 ## Delete Unused GameObjects
-Deletes all game objects that have no used components and are not referenced in any other used components. This also applies to bones referenced in skinned meshes as long as the bones aren't moved by animations, eye look settings or phys bone components. It re parents the children of the deleted game objects to their respective parents as well as transfers its weight to the parent.
+Deletes all game objects that have no used components and are not referenced in any other used components. This also applies to bones referenced in skinned meshes as long as the bones aren't moved by animations, eye look settings or phys bone components. It re-parents the children of the deleted game objects to their respective parents as well as transfers its weight to the parent.
 ## Use Ring Finger as Foot Collider
 Moves the ring finger collider to match the foot contact. This enables you to touch other players phys bones with your feet.
 ## Profile Time Used
@@ -192,6 +204,7 @@ In addition to the selected optimizations there are some optimizations that are 
 * Bake unused shape keys with non-zero weight into the mesh data. (only if the blend shape has a single frame)
 * Remove animation curves which reference a binding that doesn't exist on the avatar.
 * Merge identical material slots on skinned meshes.
+  * Slots affected by material swap animations are not merged.
 * Only reference bones if they have a non-zero weight on any vertex.
 * Remove everything with the EditorOnly tag.
 ## Show Mesh & Material Merge Preview
@@ -201,16 +214,22 @@ Here you can see an example of this which will be referenced in this section:
 ![Mesh & Material Merge Preview](Documentation~/img/exampleMeshMaterialMergePreview.png)
 
 In this detailed view the resulting meshes are separated by spaces. Materials that get merged together are indented. The button with the name "S" next to each group will select all the materials in that group. In the example you can see 3 resulting meshes. You can also see that `Body/FaceSkin` and `Body/Eyes` get merged into one material while `Body/FaceAlpha` is still its own material.
+
+This info can be wrong when using nondestructive tooling such as VRCFury or ModularAvatar as they will change the avatar at built time which the optimizer can't see before it happens.
 ## Show FX Layer Merge Result
-In this section you can see which layers in the FXLayer could get merged or deleted. The VRChat performance rank icon is used to indicate if a layer could be optimized:
+In this section you can see which layers in the FX Layer could get merged or deleted. The VRChat performance rank icon is used to indicate if a layer could be optimized:
   * Excellent - Layer is useless and can be deleted.
   * Good - Layer is a simple toggle and can be merged into a direct blend tree.
   * Medium - Layer is a motion time state and can be approximated with a 1D blend tree.
   * Very Poor - Layer can't be optimized.
 
 The option Show Detailed Errors will show you the reasons why the optimizer rejected a layer from being optimized.
+
+This info can be wrong when using nondestructive tooling such as VRCFury or ModularAvatar as they will change the avatar at built time which the optimizer can't see before it happens.
 ## Debug Info
 Shows debug information about how the optimizer is understanding the avatar.
+
+This info can be wrong when using nondestructive tooling such as VRCFury or ModularAvatar as they will change the avatar at built time which the optimizer can't see before it happens.
 ### Unparsable Materials
 Shows all materials that can't be parsed by the optimizer.  
 These materials stop the meshes they are in from getting merged with other meshes. It also disables the `Write Properties as Static Values` from getting applied to them.

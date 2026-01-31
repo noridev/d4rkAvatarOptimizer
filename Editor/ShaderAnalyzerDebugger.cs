@@ -13,7 +13,7 @@ public class ShaderAnalyzerDebugger : EditorWindow
     private Material material = null;
     private Shader shader = null;
     private ParsedShader parsedShader;
-    private int maxLines = 20;
+    private int maxLines = 0;
     private int maxProperties = 50;
     private int maxKeywords = 10;
     private bool showShaderLabParamsOnly = false;
@@ -57,26 +57,27 @@ public class ShaderAnalyzerDebugger : EditorWindow
 
     public void OnGUI()
     {
-        if (ObjectField<Material>(ref material, "Material"))
+        if (ObjectField(ref material, "Material"))
         {
             shader = null;
             folder = null;
             lastTime = 0;
         }
-        if (ObjectField<Shader>(ref shader, "Shader"))
+        if (ObjectField(ref shader, "Shader"))
         {
             material = null;
             folder = null;
             lastTime = 0;
         }
-        if (ObjectField<DefaultAsset>(ref folder, "Folder"))
+        if (ObjectField(ref folder, "Folder"))
         {
             material = null;
             shader = null;
             if (folder != null)
             {
                 var longPath = Path.GetFullPath(AssetDatabase.GetAssetPath(folder));
-                var files = Directory.GetFiles(longPath, "*.shader", SearchOption.AllDirectories);
+                var files = Directory.GetFiles(longPath, "*.shader", SearchOption.AllDirectories)
+                    .Concat(Directory.GetFiles(longPath, "*.orlshader", SearchOption.AllDirectories)).ToArray();
                 int prefixLength = Application.dataPath.Length - "Assets".Length;
                 shaders = new List<Shader>();
                 foreach (var file in files.Select(s => s.Substring(prefixLength)))
@@ -286,7 +287,9 @@ public class ShaderAnalyzerDebugger : EditorWindow
             EditorGUI.indentLevel++;
             foreach (var keyword in parsedShader.shaderFeatureKeyWords.OrderBy(s => s))
             {
-                EditorGUILayout.ToggleLeft(keyword, material.IsKeywordEnabled(keyword));
+                var tooltip = parsedShader.keywordToProperty.TryGetValue(keyword, out var prop)
+                    ? $"tied to property '{prop.name}' with display name '{prop.displayName}'" : "";
+                EditorGUILayout.ToggleLeft(new GUIContent(keyword, tooltip), material.IsKeywordEnabled(keyword));
             }
             EditorGUI.indentLevel--;
         }
@@ -321,7 +324,10 @@ public class ShaderAnalyzerDebugger : EditorWindow
         {
             if (showShaderLabParamsOnly && prop.shaderLabParams.Count == 0)
                 return false;
-            if (!string.IsNullOrEmpty(propertyFilter) && !prop.name.Contains(propertyFilter) && !(propertyFilter == "ifex" && parsedShader.ifexParameters.Contains(prop.name)))
+            if (!string.IsNullOrEmpty(propertyFilter)
+                    && !prop.name.Contains(propertyFilter)
+                    && !(propertyFilter == "ifex" && parsedShader.ifexParameters.Contains(prop.name))
+                    && !(propertyFilter == "keyword" && prop.shaderKeywords.Count > 0))
                 return false;
             return true;
         }
@@ -330,16 +336,31 @@ public class ShaderAnalyzerDebugger : EditorWindow
         {
             EditorGUI.indentLevel++;
             int shownProperties = 0;
-            propertyFilter = EditorGUILayout.TextField("Property Filter", propertyFilter);
+            propertyFilter = EditorGUILayout.TextField(new GUIContent("Property Filter", "Filter properties by name, 'ifex' for ifex parameters, or 'keyword' for properties with shader keywords"), propertyFilter);
             for (int i = 0; shownProperties < maxProperties && i < parsedShader.properties.Count; i++)
             {
                 var prop = parsedShader.properties[i];
                 if (!IsShownProperty(prop))
                     continue;
                 shownProperties++;
-                EditorGUILayout.LabelField(prop.name, (prop.hasGammaTag ? "[gamma] " : "") + prop.type
+                using var _ = new EditorGUILayout.HorizontalScope();
+                GUILayout.Space(15 * EditorGUI.indentLevel);
+                var rect = EditorGUILayout.GetControlRect(GUILayout.MinWidth(100));
+                GUI.Label(rect, new GUIContent(prop.name, prop.displayName));
+                rect = EditorGUILayout.GetControlRect(GUILayout.MinWidth(80));
+                var typeAndDefault = (prop.hasGammaTag ? "[gamma] " : "") + prop.type
                     + (prop.shaderLabParams.Count > 0 ? " {" + string.Join(",", prop.shaderLabParams) + "}" : "")
-                    + " = " + prop.defaultValue);
+                    + " = " + prop.defaultValue;
+                GUI.Label(rect, new GUIContent(typeAndDefault, typeAndDefault));
+                rect = EditorGUILayout.GetControlRect(GUILayout.MinWidth(80));
+                var keywordLabel = "";
+                var keywordTooltip = "";
+                if (prop.shaderKeywords.Count > 0)
+                {
+                    keywordLabel = prop.shaderKeywords.Count == 1 ? prop.shaderKeywords.First() : prop.shaderKeywords.Count + " Keywords";
+                    keywordTooltip = string.Join("\n", prop.shaderKeywords);
+                }
+                GUI.Label(rect, new GUIContent(keywordLabel, keywordTooltip));
             }
             EditorGUI.indentLevel--;
         }

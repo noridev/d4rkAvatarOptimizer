@@ -16,6 +16,7 @@ using VRC.SDKBase.Validation.Performance;
 using Type = System.Type;
 using MaterialSlot = d4rkAvatarOptimizer.MaterialSlot;
 using Settings = d4rkAvatarOptimizer.Settings;
+using moe.noridev.d4rkavataroptimizer;
 
 [CustomEditor(typeof(d4rkAvatarOptimizer))]
 public class d4rkAvatarOptimizerEditor : Editor
@@ -51,19 +52,36 @@ public class d4rkAvatarOptimizerEditor : Editor
 
         using (new EditorGUI.IndentLevelScope())
         {
-            EditorGUILayout.LabelField($"<size=20>d4rk{(currentViewWidth > 350 ? "pl4y3r's" : "")} Avatar Optimizer</size>", new GUIStyle(EditorStyles.label) { richText = true, alignment = TextAnchor.LowerCenter });
-            settingsRect = GUILayoutUtility.GetLastRect();
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                settingsRect = GUILayoutUtility.GetRect(32, 1, GUILayout.ExpandWidth(false));
+                EditorGUILayout.LabelField(
+                    $"<size=20>d4rk{(currentViewWidth > 370 ? "pl4y3r's" : "")} Avatar Optimizer</size>",
+                    new GUIStyle(EditorStyles.label) { richText = true, alignment = TextAnchor.LowerCenter });
+            }
             EditorGUILayout.LabelField($"v{packageInfo.version} | Custom by NoriDev", EditorStyles.centeredGreyMiniLabel);
         }
 
         settingsRect.width = 24;
         settingsRect.height = 24;
-        bool pressedSettingsButton = GUI.Button(settingsRect, new GUIContent("", "Settings"));
-        GUI.DrawTexture(settingsRect, EditorGUIUtility.IconContent("Settings@2x").image);
-        if (pressedSettingsButton)
+        if (GUI.Button(settingsRect, new GUIContent("", "Global settings and defaults for new optimizer components can be changed here.")))
         {
             EditorWindow.GetWindow(typeof(AvatarOptimizerSettings));
         }
+        GUI.DrawTexture(settingsRect, EditorGUIUtility.IconContent("Settings@2x").image);
+
+        var koFiRect = settingsRect;
+        koFiRect.x += settingsRect.width + 2;
+        if (GUI.Button(koFiRect, new GUIContent("", "Support me on Ko-fi!")))
+        {
+            Application.OpenURL("https://ko-fi.com/d4rkpl4y3r");
+        }
+        const float pad = 2;
+        koFiRect.x += pad;
+        koFiRect.y += pad;
+        koFiRect.width -= pad * 2;
+        koFiRect.height -= pad * 2;
+        GUI.DrawTexture(koFiRect, KoFiIcon);
 
         if (Application.isPlaying)
         {
@@ -79,14 +97,14 @@ public class d4rkAvatarOptimizerEditor : Editor
                 EditorGUILayout.LabelField(GetLabelWithTooltip("Presets"), EditorStyles.boldLabel, GUILayout.Width(50));
                 foreach (var preset in presets)
                 {
-                    GUI.enabled = !optimizer.IsPresetActive(preset);
-                    if (GUILayout.Button(GetLabelWithTooltip(preset)))
+                    using var cc = new EditorGUI.ChangeCheckScope();
+                    bool clicked = GUILayout.Toggle(optimizer.IsPresetActive(preset), GetLabelWithTooltip(preset), GUI.skin.button);
+                    if (cc.changed && clicked)
                     {
                         optimizer.SetPreset(preset);
                         ClearUICaches();
                         EditorUtility.SetDirty(optimizer);
                     }
-                    GUI.enabled = true;
                 }
             }
         }
@@ -154,24 +172,16 @@ public class d4rkAvatarOptimizerEditor : Editor
 
         if (GUILayout.Button("<size=18>Create Optimized Copy</size>", new GUIStyle(GUI.skin.button) { richText = true }))
         {
-            Profiler.enabled = optimizer.ProfileTimeUsed;
-            Profiler.Reset();
-            Profiler.StartSection("Assign New Avatar ID");
             AssignNewAvatarIDIfEmpty();
-            Profiler.StartNextSection("Instantiate(optimizer.gameObject)");
-            var copy = Instantiate(optimizer.gameObject);
-            Profiler.StartNextSection("Move Copy to Scene");
-            SceneManager.MoveGameObjectToScene(copy, optimizer.gameObject.scene);
-            Profiler.StartNextSection("Optimize Copy");
-            copy.name = optimizer.gameObject.name + "(BrokenCopy)";
+            var avDescriptor = optimizer.GetAvatarDescriptor();
+            var copy = Instantiate(avDescriptor.gameObject);
+            SceneManager.MoveGameObjectToScene(copy, avDescriptor.gameObject.scene);
+            copy.name = avDescriptor.gameObject.name + "(BrokenCopy)";
             copy.GetComponent<d4rkAvatarOptimizer>().Optimize();
-            copy.name = optimizer.gameObject.name + "(OptimizedCopy)";
-            Profiler.StartNextSection("Select Copy");
+            copy.name = avDescriptor.gameObject.name + "(OptimizedCopy)";
             copy.SetActive(true);
-            optimizer.gameObject.SetActive(false);
+            avDescriptor.gameObject.SetActive(false);
             Selection.objects = new Object[] { copy };
-            Profiler.EndSection();
-            Profiler.PrintTimeUsed();
             Profiler.Reset();
             return;
         }
@@ -191,12 +201,13 @@ public class d4rkAvatarOptimizerEditor : Editor
         }
 
         Profiler.StartSection("Show Perf Rank Change");
-        var exclusions = optimizer.GetAllExcludedTransforms();
-        var particleSystemCount = optimizer.GetNonEditorOnlyComponentsInChildren<ParticleSystem>().Count;
-        var trailRendererCount = optimizer.GetNonEditorOnlyComponentsInChildren<TrailRenderer>().Count;
-        var skinnedMeshes = optimizer.GetNonEditorOnlyComponentsInChildren<SkinnedMeshRenderer>();
-        int meshCount = optimizer.GetNonEditorOnlyComponentsInChildren<MeshRenderer>().Count;
-        int totalMaterialCount = optimizer.GetNonEditorOnlyComponentsInChildren<Renderer>()
+        static int ParticleSystemMaterialCount(ParticleSystemRenderer psr) => psr.trailMaterial != null ? 2 : 1;
+        var allRenderers = optimizer.GetNonEditorOnlyComponentsInChildren<Renderer>();
+        var particleSystemCount = allRenderers.OfType<ParticleSystemRenderer>().Sum(ParticleSystemMaterialCount);
+        var trailRendererCount = allRenderers.OfType<TrailRenderer>().Count();
+        var skinnedMeshes = allRenderers.OfType<SkinnedMeshRenderer>().ToList();
+        var meshRenderers = allRenderers.OfType<MeshRenderer>().ToList();
+        int totalMaterialCount = skinnedMeshes.Cast<Renderer>().Concat(meshRenderers)
             .Sum(r => r.GetSharedMesh() == null ? 0 : r.GetSharedMesh().subMeshCount) + particleSystemCount + trailRendererCount;
         var totalBlendShapePaths = new HashSet<string>(skinnedMeshes.SelectMany(r => {
             if (r.sharedMesh == null)
@@ -207,13 +218,14 @@ public class d4rkAvatarOptimizerEditor : Editor
         int optimizedSkinnedMeshCount = 0;
         int optimizedMeshCount = 0;
         int optimizedTotalMaterialCount = 0;
+        var exclusions = optimizer.GetAllExcludedTransforms();
         foreach (var matched in MergedMaterialPreview)
         {
             var renderers = matched.SelectMany(m => m).Select(slot => slot.renderer).Distinct().ToArray();
             if (renderers == null || renderers.Length == 0)
-                continue;   
+                continue;
             if (renderers[0] == null)
-                continue; 
+                continue;
             if (renderers.Any(r => r is SkinnedMeshRenderer) || renderers.Length > 1)
             {
                 optimizedSkinnedMeshCount++;
@@ -231,13 +243,17 @@ public class d4rkAvatarOptimizerEditor : Editor
                 var mesh = renderers[0].GetSharedMesh();
                 optimizedTotalMaterialCount += mesh == null ? 0 : mesh.subMeshCount;
             }
-            else // ParticleSystemRenderer & TrailRenderer
+            else if (renderers[0] is ParticleSystemRenderer psr)
+            {
+                optimizedTotalMaterialCount += ParticleSystemMaterialCount(psr);
+            }
+            else // TrailRenderer
             {
                 optimizedTotalMaterialCount += 1;
             }
         }
         PerfRankChangeLabel("Skinned Mesh Renderers", skinnedMeshes.Count, optimizedSkinnedMeshCount, PerformanceCategory.SkinnedMeshCount);
-        PerfRankChangeLabel("Mesh Renderers", meshCount, optimizedMeshCount, PerformanceCategory.MeshCount);
+        PerfRankChangeLabel("Mesh Renderers", meshRenderers.Count, optimizedMeshCount, PerformanceCategory.MeshCount);
         PerfRankChangeLabel("Material Slots", totalMaterialCount, optimizedTotalMaterialCount, PerformanceCategory.MaterialCount);
         if (optimizer.GetFXLayer() != null)
         {
@@ -254,7 +270,11 @@ public class d4rkAvatarOptimizerEditor : Editor
 
         EditorGUILayout.Separator();
 
-        if (Foldout("Show Mesh & Material Merge Preview", ref optimizer.ShowMeshAndMaterialMergePreview))
+        DrawWhyNoMaterialMergeButton();
+
+        EditorGUILayout.Separator();
+
+        if (Foldout("Show Mesh & Material Merge Preview", ref optimizer.ShowMeshAndMaterialMergePreview, showNonDestructiveToolingWarning: true))
         {
             Profiler.StartSection("Show Merge Preview");
             foreach (var matched in MergedMaterialPreview)
@@ -286,7 +306,7 @@ public class d4rkAvatarOptimizerEditor : Editor
 
         if (optimizer.OptimizeFXLayer && optimizer.GetFXLayer() != null)
         {
-            if (Foldout("Show FX Layer Merge Result", ref optimizer.ShowFXLayerMergeResults))
+            if (Foldout("Show FX Layer Merge Result", ref optimizer.ShowFXLayerMergeResults, showNonDestructiveToolingWarning: true))
             {
                 Profiler.StartSection("Show FX Layer Merge Errors");
                 ToggleOptimizerProperty(nameof(optimizer.ShowFXLayerMergeErrors));
@@ -307,7 +327,7 @@ public class d4rkAvatarOptimizerEditor : Editor
 
                     using (new EditorGUILayout.HorizontalScope())
                     {
-                        EditorGUILayout.LabelField(new GUIContent(GetPerformanceIconForRating(perfRating)), GUILayout.Width(20));
+                        EditorGUILayout.LabelField(GetPerformanceIconForRating(perfRating), GUILayout.Width(20));
                         EditorGUILayout.LabelField(new GUIContent($"{i}{fxLayerLayers[i].name}", string.Join("\n", errorMessages[i])));
                     }
                     if (optimizer.ShowFXLayerMergeErrors)
@@ -323,11 +343,10 @@ public class d4rkAvatarOptimizerEditor : Editor
                 }
                 Profiler.EndSection();
             }
+            EditorGUILayout.Separator();
         }
 
-        EditorGUILayout.Separator();
-
-        if (Foldout("Debug Info", ref optimizer.ShowDebugInfo))
+        if (Foldout("Debug Info", ref optimizer.ShowDebugInfo, showNonDestructiveToolingWarning: true))
         {
             ToggleOptimizerProperty(nameof(optimizer.ProfileTimeUsed));
             EditorGUI.indentLevel++;
@@ -587,11 +606,21 @@ public class d4rkAvatarOptimizerEditor : Editor
 
     private bool Validate()
     {
-        var avDescriptor = optimizer.GetComponent<VRCAvatarDescriptor>();
+        var avDescriptor = optimizer.GetAvatarDescriptor();
 
         if (avDescriptor == null)
         {
-            EditorGUILayout.HelpBox("No VRCAvatarDescriptor found on the root object.", MessageType.Error);
+            EditorGUILayout.HelpBox("No VRCAvatarDescriptor found.", MessageType.Error);
+            return false;
+        }
+
+        var allOptimizerComponents = avDescriptor.GetComponentsInChildren<d4rkAvatarOptimizer>(true);
+        if (allOptimizerComponents.Length > 1)
+        {
+            EditorGUILayout.HelpBox("Multiple d4rkAvatarOptimizer components found on the avatar.\n" +
+                "Remove the duplicates. Components are at paths:\n - " +
+                string.Join("\n - ", allOptimizerComponents.Select(c => avDescriptor.name + (c.transform == avDescriptor.transform ? "" : "/" + c.GetPathToRoot(c)))),
+                MessageType.Error);
             return false;
         }
 
@@ -611,7 +640,7 @@ public class d4rkAvatarOptimizerEditor : Editor
             return false;
         }
 
-        if (optimizer.name.EndsWith("(OptimizedCopy)"))
+        if (avDescriptor.name.EndsWith("(OptimizedCopy)"))
         {
             EditorGUILayout.HelpBox("Put the optimizer on the original avatar, not the optimized copy.", MessageType.Error);
             return false;
@@ -633,7 +662,7 @@ public class d4rkAvatarOptimizerEditor : Editor
             && avDescriptor.VisemeSkinnedMesh != null)
         {
             var meshRenderer = avDescriptor.VisemeSkinnedMesh;
-            if (optimizer.GetComponentsInChildren<SkinnedMeshRenderer>(true).All(r => r != meshRenderer))
+            if (avDescriptor.GetComponentsInChildren<SkinnedMeshRenderer>(true).All(r => r != meshRenderer))
             {
                 EditorGUILayout.HelpBox("Viseme SkinnedMeshRenderer is not a child of the avatar root.", MessageType.Error);
             }
@@ -643,20 +672,20 @@ public class d4rkAvatarOptimizerEditor : Editor
             && avDescriptor.customEyeLookSettings.eyelidsSkinnedMesh != null)
         {
             var meshRenderer = avDescriptor.customEyeLookSettings.eyelidsSkinnedMesh;
-            if (optimizer.GetComponentsInChildren<SkinnedMeshRenderer>(true).All(r => r != meshRenderer))
+            if (avDescriptor.GetComponentsInChildren<SkinnedMeshRenderer>(true).All(r => r != meshRenderer))
             {
                 EditorGUILayout.HelpBox("Eyelid SkinnedMeshRenderer is not a child of the avatar root.", MessageType.Error);
             }
         }
 
-        if (Object.FindObjectsOfType<VRCAvatarDescriptor>().Any(av => av != null && av.name.EndsWith("(OptimizedCopy)")))
+        if (FindObjectsOfType<VRCAvatarDescriptor>().Any(av => av != null && av.name.EndsWith("(OptimizedCopy)")))
         {
             EditorGUILayout.HelpBox(
                 "Optimized copy of some avatar is present in the scene.\n" +
                 "Its assets will be deleted when creating a new optimized copy.", MessageType.Error);
         }
 
-        if (Object.FindObjectsOfType<VRCAvatarDescriptor>().Any(av => av != null && av.name.EndsWith("(BrokenCopy)")))
+        if (FindObjectsOfType<VRCAvatarDescriptor>().Any(av => av != null && av.name.EndsWith("(BrokenCopy)")))
         {
             EditorGUILayout.HelpBox(
                 "Seems like the last optimization attempt failed.\n" +
@@ -668,8 +697,8 @@ public class d4rkAvatarOptimizerEditor : Editor
 
         var exclusions = optimizer.GetAllExcludedTransforms();
 
-        var animatorsExcludingRoot = optimizer.GetComponentsInChildren<Animator>(true)
-            .Where(a => a.gameObject != optimizer.gameObject)
+        var animatorsExcludingRoot = avDescriptor.GetComponentsInChildren<Animator>(true)
+            .Where(a => a.gameObject != avDescriptor.gameObject)
             .Where(a => !exclusions.Contains(a.transform))
             .Where(a => a.runtimeAnimatorController != null)
             .ToArray();
@@ -805,8 +834,8 @@ public class d4rkAvatarOptimizerEditor : Editor
                 "You should expect your poly count to increase, this is working as intended!", MessageType.Info);
         }
 
-        var furyType = Type.GetType("VF.Model.VRCFury, VRCFury");
-        if (furyType != null && optimizer.GetComponentsInChildren(furyType, true).Any())
+        var tools = optimizer.GetNonDestructiveToolsUsedOnAvatar();
+        if (tools.Contains("VRCFury"))
         {
             EditorGUILayout.HelpBox(
                 "VRCFury is used on the avatar. This means the perf rank change and merge result previews can be inaccurate as the optimizer does not take VRCFury into account for those.\n" +
@@ -815,8 +844,7 @@ public class d4rkAvatarOptimizerEditor : Editor
             return false;
         }
 
-        #if MODULAR_AVATAR_EXISTS
-        if (optimizer.GetComponentsInChildren<nadena.dev.modular_avatar.core.AvatarTagComponent>(true).Any())
+        if (tools.Contains("Modular Avatar"))
         {
             EditorGUILayout.HelpBox(
                 "Modular Avatar is used on the avatar. This means the perf rank change and merge result previews " + 
@@ -825,19 +853,40 @@ public class d4rkAvatarOptimizerEditor : Editor
                 $"For uploading use the {d4rkAvatarOptimizer.GetDisplayName(nameof(d4rkAvatarOptimizer.ApplyOnUpload))} feature as that ensures Modular Avatar and the optimizer get used in the correct order.", MessageType.Warning);
             return false;
         }
-        #endif
 
         return true;
     }
 
+    private void DrawWhyNoMaterialMergeButton()
+    {
+        if (!optimizer.MergeDifferentPropertyMaterials)
+            return;
+        using var _ = new EditorGUILayout.HorizontalScope();
+        GUILayout.Space(15 * EditorGUI.indentLevel);
+        if (GUILayout.Button(new GUIContent("Material Merge Analyzer", "Open the \"Why No Material Merge\" window to analyze why some materials can't be merged.")))
+        {
+            EditorWindow.GetWindow<WhyNoMaterialMerge>().Show();
+        }
+    }
+
+    private string GetNonDestructiveToolingWarning(string sectionName)
+    {
+        var tools = optimizer.GetNonDestructiveToolsUsedOnAvatar();
+        if (tools.Count == 0)
+            return null;
+        return $"The following non-destructive tool{(tools.Count == 1 ? " is" : "s are")} found on the avatar:\n" +
+               string.Join(", ", tools) +
+               $"\nThis means the {sectionName} can be wrong as {(tools.Count == 1 ? "this tool" : "these tools")} can change the avatar at build time which the optimizer can't see before it happens.";
+    }
+
     private static void AssignNewAvatarIDIfEmpty()
     {
-        var avDescriptor = optimizer.GetComponent<VRCAvatarDescriptor>();
+        var avDescriptor = optimizer.GetAvatarDescriptor();
         if (avDescriptor == null)
             return;
-        if (!optimizer.TryGetComponent<VRC.Core.PipelineManager>(out var pm))
+        if (!avDescriptor.TryGetComponent<VRC.Core.PipelineManager>(out var pm))
         {
-            pm = optimizer.gameObject.AddComponent<VRC.Core.PipelineManager>();
+            pm = avDescriptor.gameObject.AddComponent<VRC.Core.PipelineManager>();
         }
         if (!string.IsNullOrEmpty(pm.blueprintId))
             return;
@@ -1233,16 +1282,33 @@ public class d4rkAvatarOptimizerEditor : Editor
         return output;
     }
 
-    private bool Foldout(string label, ref bool value)
+    private void DrawWarningIconWithTooltip(string tooltip, Rect rect)
+    {
+        GUI.Label(rect, new GUIContent("", tooltip));
+        GUI.DrawTexture(rect, EditorGUIUtility.IconContent("console.warnicon.sml").image);
+    }
+
+    private bool Foldout(string label, ref bool value, bool showNonDestructiveToolingWarning = false)
     {
         var content = GetLabelWithTooltip(label);
         bool output = EditorGUILayout.Foldout(value, content, true);
+        var rect = GUILayoutUtility.GetLastRect();
+        rect.x += rect.width;
+        rect.width = 20;
         if (!string.IsNullOrEmpty(content.tooltip))
         {
-            var rect = GUILayoutUtility.GetLastRect();
-            rect.x += rect.width - 20;
-            rect.width = 20;
+            rect.x -= 20;
+            GUI.Label(rect, new GUIContent("", content.tooltip));
             GUI.DrawTexture(rect, EditorGUIUtility.IconContent("_Help").image);
+        }
+        if (showNonDestructiveToolingWarning)
+        {
+            var warning = GetNonDestructiveToolingWarning(label);
+            if (!string.IsNullOrEmpty(warning))
+            {
+                rect.x -= 20;
+                DrawWarningIconWithTooltip(warning, rect);
+            }
         }
         if (value != output)
         {
@@ -1373,38 +1439,34 @@ public class d4rkAvatarOptimizerEditor : Editor
         }
     }
 
-    static Texture _perfIcon_Excellent;
-    static Texture _perfIcon_Good;
-    static Texture _perfIcon_Medium;
-    static Texture _perfIcon_Poor;
-    static Texture _perfIcon_VeryPoor;
+    static Texture _kofiIcon = null;
+    static Texture KoFiIcon { get => _kofiIcon == null ? _kofiIcon = Resources.Load<Texture>("d4rkAO_ko-fi_64") : _kofiIcon; }
 
-    private Texture GetPerformanceIconForRating(PerformanceRating value)
+    static GUIContent _perfIcon_Excellent;
+    static GUIContent _perfIcon_Good;
+    static GUIContent _perfIcon_Medium;
+    static GUIContent _perfIcon_Poor;
+    static GUIContent _perfIcon_VeryPoor;
+
+    private GUIContent GetPerformanceIconForRating(PerformanceRating rating)
     {
         if (_perfIcon_Excellent == null)
-            _perfIcon_Excellent = Resources.Load<Texture>("PerformanceIcons/Perf_Great_32");
-        if (_perfIcon_Good == null)
-            _perfIcon_Good = Resources.Load<Texture>("PerformanceIcons/Perf_Good_32");
-        if (_perfIcon_Medium == null)
-            _perfIcon_Medium = Resources.Load<Texture>("PerformanceIcons/Perf_Medium_32");
-        if (_perfIcon_Poor == null)
-            _perfIcon_Poor = Resources.Load<Texture>("PerformanceIcons/Perf_Poor_32");
-        if (_perfIcon_VeryPoor == null)
-            _perfIcon_VeryPoor = Resources.Load<Texture>("PerformanceIcons/Perf_Horrible_32");
-
-        switch (value)
         {
-            case PerformanceRating.Excellent:
-                return _perfIcon_Excellent;
-            case PerformanceRating.Good:
-                return _perfIcon_Good;
-            case PerformanceRating.Medium:
-                return _perfIcon_Medium;
-            case PerformanceRating.Poor:
-                return _perfIcon_Poor;
-            default:
-                return _perfIcon_VeryPoor;
+            _perfIcon_Excellent = new GUIContent(Resources.Load<Texture>("PerformanceIcons/Perf_Great_32"));
+            _perfIcon_Good = new GUIContent(Resources.Load<Texture>("PerformanceIcons/Perf_Good_32"));
+            _perfIcon_Medium = new GUIContent(Resources.Load<Texture>("PerformanceIcons/Perf_Medium_32"));
+            _perfIcon_Poor = new GUIContent(Resources.Load<Texture>("PerformanceIcons/Perf_Poor_32"));
+            _perfIcon_VeryPoor = new GUIContent(Resources.Load<Texture>("PerformanceIcons/Perf_Horrible_32"));
         }
+
+        return rating switch
+        {
+            PerformanceRating.Excellent => _perfIcon_Excellent,
+            PerformanceRating.Good => _perfIcon_Good,
+            PerformanceRating.Medium => _perfIcon_Medium,
+            PerformanceRating.Poor => _perfIcon_Poor,
+            _ => _perfIcon_VeryPoor,
+        };
     }
 
     PerformanceRating GetPerfRank(int count, int[] perfLevels)
@@ -1457,12 +1519,25 @@ public class d4rkAvatarOptimizerEditor : Editor
 
         using (new EditorGUILayout.HorizontalScope())
         {
-            EditorGUILayout.LabelField(new GUIContent(GetPerformanceIconForRating(oldRating)), GUILayout.Width(20));
+            EditorGUILayout.LabelField(GetPerformanceIconForRating(oldRating), GUILayout.Width(20));
             EditorGUILayout.LabelField($"{oldValue}", GUILayout.Width(25));
             EditorGUILayout.LabelField($"->", GUILayout.Width(20));
-            EditorGUILayout.LabelField(new GUIContent(GetPerformanceIconForRating(newRating)), GUILayout.Width(20));
+            EditorGUILayout.LabelField(GetPerformanceIconForRating(newRating), GUILayout.Width(20));
             EditorGUILayout.LabelField($"{newValue}", GUILayout.Width(25));
             EditorGUILayout.LabelField(label);
+        }
+
+        // Hacky way to only show the warning icon for the first perf rank change label
+        if (label == "Skinned Mesh Renderers")
+        {
+            var warning = GetNonDestructiveToolingWarning("Performance Rank Change Preview");
+            if (!string.IsNullOrEmpty(warning))
+            {
+                var rect = GUILayoutUtility.GetLastRect();
+                rect.x += rect.width - 20;
+                rect.width = 20;
+                DrawWarningIconWithTooltip(warning, rect);
+            }
         }
     }
 }

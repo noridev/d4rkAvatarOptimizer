@@ -1,10 +1,40 @@
-## v4.0.0
+## v4.0.1
 ### Changes
-* Minimum required VRChat Avatar SDK version is now 3.9.0
+* Preset buttons and slot selection buttons in `Why No Material Merge` window are now toggle buttons to better highlight the current selection.
+
+### Bug Fixes
+* Fix `Use Shader Toggles` not working properly in editor when using glcore graphics API. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues/174)
+* Perf rank change preview didn't count ParticleSystemRenderer as two material slots when they have trails enabled.
+
+## v4.0.0
+### Features
+* Reduce draw calls when using shader or NaNimation toggles and merging skinned meshes:
+  * For each resulting material slot if it has only one source mesh, it will now add a material swap animation to the animations that disables / enables that source mesh.
+  * This will skip the draw call entirely instead of having to discard the vertices in the shader.
+  * It also has the `"IgnoreProjector"="True"` tag to prevent projector components from trying to render the disabled parts.
+* Deduplicate generated shaders if two materials create the exact same optimized shader.
+  * Also stopped baking `_TexelSize` into the shader to allow materials that only differ by textures to share the same optimized shader.
+* Optimizer writes a log file `TrashBin/_log.txt` with information about what it did.
+* New debug tool `Why No Material Merge` that shows why selected material slots can't be merged together. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues/164)
+  * You can open it under `Tools/d4rkpl4y3r/Why No Material Merge`.
+
+### Changes
+* Minimum supported VRChat Avatar SDK version is now 3.9.0
 * Minimum supported Unity version is now 2022.3
+* Minimum supported ORLShader Generator version is now 7.1.0
+  * This allows the use of `Merge Same Dimension Textures` with `.orlshader` files.
+* The `d4rkAvatarOptimizer` component can now be put anywhere in the avatar hierarchy instead of only on the root.
+* The different preview foldouts now show a warning icon with tooltip if any non destructive tooling is detected on the avatar.
+* Added Ko-fi button to the optimizer window next to the settings button.
 
 ### Bug Fixes
 * The component now gets properly shown as `d4rk Avatar Optimizer` in the inspector instead of `D 4rk Avatar Optimizer`. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/pull/166)
+* Fix tooltips on foldouts not showing up when hovering over the tooltip icon specifically.
+* Fix `Delete Unused Components` trying to delete rigidbody components before joint components that depend on them.
+* Mark all transforms with a `Rigidbody` component as moving transforms.
+* Fix optimizer overwriting existing data in uv0.zw. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/pull/173)
+* Fix optimizer deleting FinalIK components that are always disabled.
+  * FinalIK still work even when the component is disabled? so we keep them. Fixes issues with the GrabFullBody gimmick.
 
 ## v3.12.5
 ### Bug Fixes

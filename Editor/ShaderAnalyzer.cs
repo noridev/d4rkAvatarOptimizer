@@ -36,11 +36,13 @@ namespace d4rkpl4y3r.AvatarOptimizer
                 TextureCubeArray
             }
             public string name;
+            public string displayName;
             public Type type = Type.Unknown;
-            public HashSet<string> shaderLabParams = new HashSet<string>();
+            public HashSet<string> shaderLabParams = new();
             public string defaultValue;
             public bool hasGammaTag = false;
             public bool doNotLock = false;
+            public HashSet<string> shaderKeywords = new();
         }
         public class Function
         {
@@ -60,7 +62,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
                 }
             }
             public string name;
-            public List<Parameter> parameters = new List<Parameter>();
+            public List<Parameter> parameters = new();
             public override string ToString()
             {
                 if (parameters.Count == 0)
@@ -92,8 +94,8 @@ namespace d4rkpl4y3r.AvatarOptimizer
             public Function domain;
             public Function geometry;
             public Function fragment;
-            public HashSet<string> shaderFeatureKeyWords = new HashSet<string>();
-            public Dictionary<string, string> tags = new Dictionary<string, string>();
+            public HashSet<string> shaderFeatureKeyWords = new();
+            public Dictionary<string, string> tags = new();
             public string name;
             public int startLineIndex;
             public int lineCount;
@@ -106,21 +108,22 @@ namespace d4rkpl4y3r.AvatarOptimizer
         public bool parsedCorrectly = false;
         public string errorMessage = "";
         public bool hasDisableBatchingTag = false;
-        public List<string> customTextureDeclarations = new List<string>();
-        public Dictionary<string, int> multiIncludeFileCount = new Dictionary<string, int>();
+        public List<string> customTextureDeclarations = new();
+        public Dictionary<string, int> multiIncludeFileCount = new();
         public bool mismatchedCurlyBraces = false;
-        public Dictionary<string, List<string>> text = new Dictionary<string, List<string>>();
-        public List<Property> properties = new List<Property>();
-        public List<Property> propertiesToCheckWhenMerging = new List<Property>();
-        public List<Property> texture2DProperties = new List<Property>();
-        public Dictionary<string, Property> propertyTable = new Dictionary<string, Property>();
-        public List<Pass> passes = new List<Pass>();
-        public Dictionary<string, Function> functions = new Dictionary<string, Function>();
-        public HashSet<string> shaderFeatureKeyWords = new HashSet<string>();
-        public HashSet<string> ifexParameters = new HashSet<string>();
-        public HashSet<string> unableToParseIfexStatements = new HashSet<string>();
-        public List<string> unknownOptimizerComments = new List<string>();
-        public HashSet<string> requiredConstantProperties = new HashSet<string>();
+        public Dictionary<string, List<string>> text = new();
+        public List<Property> properties = new();
+        public List<Property> propertiesToCheckWhenMerging = new();
+        public List<Property> texture2DProperties = new();
+        public Dictionary<string, Property> propertyTable = new();
+        public Dictionary<string, Property> keywordToProperty = new();
+        public List<Pass> passes = new();
+        public Dictionary<string, Function> functions = new();
+        public HashSet<string> shaderFeatureKeyWords = new();
+        public HashSet<string> ifexParameters = new();
+        public HashSet<string> unableToParseIfexStatements = new();
+        public List<string> unknownOptimizerComments = new();
+        public HashSet<string> requiredConstantProperties = new();
 
         public bool CanMerge()
         {
@@ -174,7 +177,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
             public ParserException(string message) : base(message) { }
         }
 
-        private static Dictionary<string, ParsedShader> parsedShaderCache = new Dictionary<string, ParsedShader>();
+        private static Dictionary<string, ParsedShader> parsedShaderCache = new();
 
         public static void ClearParsedShaderCache()
         {
@@ -231,45 +234,41 @@ namespace d4rkpl4y3r.AvatarOptimizer
             filePath = Path.GetFullPath(shaderPath);
             parsedShader.filePath = filePath;
             maxIncludes = 1000;
-            doneParsing = false;
             if (shaderPath.EndsWith(".orlshader"))
             {
                 #if ORLSHADER_EXISTS
                 Profiler.StartSection("ORL.ShaderGenerator");
                 try
                 {
-                    shaderFileLines = ORL.ShaderGenerator.ShaderDefinitionImporter.GenerateShader(shaderPath, false)
+                    shaderFileLines = ORL.ShaderGenerator.ShaderDefinitionImporter.GenerateShader(shaderPath, stripSamplingMacros: true)
                         .Split(new string[] { "\r\n", "\r", "\n" }, System.StringSplitOptions.RemoveEmptyEntries);
                 }
                 catch (IOException e)
                 {
-                    parsedShader.parsedCorrectly = false;
-                    doneParsing = true;
                     parsedShader.errorMessage = e.Message;
                 }
                 Profiler.EndSection();
                 #else
-                parsedShader.parsedCorrectly = false;
-                doneParsing = true;
-                parsedShader.errorMessage = "ORLShader Generator 6.2 is not installed.";
+                parsedShader.errorMessage = "ORLShader Generator 7.1+ is not installed.";
                 #endif
+            }
+            else if (shaderPath.StartsWithSimple("Resources/unity_builtin") || shaderName == "Hidden/InternalErrorShader")
+            {
+                parsedShader.errorMessage = "Built-in Unity shaders are not supported.";
             }
             else if (!shaderPath.EndsWith(".shader"))
             {
-                parsedShader.parsedCorrectly = false;
-                doneParsing = true;
                 parsedShader.errorMessage = $"Unsupported shader file type: {Path.GetExtension(shaderPath)}";
             }
+            parsedShader.parsedCorrectly = string.IsNullOrEmpty(parsedShader.errorMessage);
+            doneParsing = !parsedShader.parsedCorrectly;
         }
 
         private ParsedShader Parse()
         {
             if (doneParsing)
                 return parsedShader;
-            var oldCulture = Thread.CurrentThread.CurrentCulture;
-            var oldUICulture = Thread.CurrentThread.CurrentUICulture;
-            Thread.CurrentThread.CurrentCulture = CultureInfo.InvariantCulture;
-            Thread.CurrentThread.CurrentUICulture = CultureInfo.InvariantCulture;
+            using var _ = new InvariantCultureScope();
             try
             {
                 RecursiveParseFile(filePath, true, filePath);
@@ -296,11 +295,6 @@ namespace d4rkpl4y3r.AvatarOptimizer
                 parsedShader.parsedCorrectly = false;
                 parsedShader.errorMessage = e.Message;
                 Debug.LogWarning(e);
-            }
-            finally
-            {
-                Thread.CurrentThread.CurrentCulture = oldCulture;
-                Thread.CurrentThread.CurrentUICulture = oldUICulture;
             }
             doneParsing = true;
             return parsedShader;
@@ -678,10 +672,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
                             endInsideTagIndex = charIndex + 1;
                         charIndex++;
                     }
-                    if (endInsideTagIndex - startInsideTagIndex <= 10) {
-                        // currently we only care about [hdr], [gamma] & [donotlock] tags
-                        tags.Add(line.Substring(startInsideTagIndex, endInsideTagIndex - startInsideTagIndex));
-                    }
+                    tags.Add(line[startInsideTagIndex..endInsideTagIndex]);
                     charIndex++;
                     while (charIndex < line.Length && (line[charIndex] == ' ' || line[charIndex] == '\t'))
                         charIndex++;
@@ -728,7 +719,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
             return (name, stringLiteral, type, defaultValue);
         }
 
-        public static ParsedShader.Property ParseProperty(string line, List<string> tags, bool clearTagsOnPropertyParse = true)
+        public static ParsedShader.Property ParseProperty(string line, List<string> tags)
         {
             var prop = ParsePropertyRaw(line, tags);
             if (prop == null) {
@@ -736,12 +727,17 @@ namespace d4rkpl4y3r.AvatarOptimizer
             }
             var output = new ParsedShader.Property();
             output.name = prop.Value.name;
+            output.displayName = prop.Value.stringLiteral.Trim('"');
+            if (output.displayName.IndexOf("--") != -1) {
+                output.displayName = output.displayName[..output.displayName.IndexOf("--")].Trim();
+            }
             string typeDefinition = prop.Value.type.ToLowerInvariant();
             output.defaultValue = prop.Value.defaultValue;
             output.hasGammaTag = false;
             bool hasHdrTag = false;
             for (int i = 0; i < tags.Count; i++) {
-                switch (tags[i].ToLowerInvariant())
+                var tag = tags[i].Trim();
+                switch (tag.ToLowerInvariant())
                 {
                     case "gamma":
                         output.hasGammaTag = true;
@@ -752,6 +748,41 @@ namespace d4rkpl4y3r.AvatarOptimizer
                     case "donotlock":
                         output.doNotLock = true;
                         break;
+                    case "texturekeyword":
+                        output.shaderKeywords.Add("PROP_" + (output.name[0] == '_' ? output.name[1..] : output.name).ToUpperInvariant());
+                        break;
+                    case "toggle":
+                    case "thrytoggle":
+                        output.shaderKeywords.Add(output.name.ToUpperInvariant() + "_ON");
+                        break;
+                    case "toggleoff":
+                        output.shaderKeywords.Add(output.name.ToUpperInvariant() + "_OFF");
+                        break;
+                }
+                if (tag.StartsWithSimple("ThryToggle("))
+                {
+                    var param = tag["ThryToggle(".Length..^1].Split(',').Select(s => s.Trim()).FirstOrDefault(s => s != "true" && s != "false");
+                    if (string.IsNullOrEmpty(param))
+                        param = output.name.ToUpperInvariant() + "_ON";
+                    output.shaderKeywords.Add(param);
+                }
+                else if (tag.StartsWithSimple("Toggle("))
+                {
+                    var param = tag["Toggle(".Length..^1].Trim();
+                    if (string.IsNullOrEmpty(param))
+                        param = output.name.ToUpperInvariant() + "_ON";
+                    output.shaderKeywords.Add(param);
+                }
+                else if (tag.StartsWithSimple("ToggleOff("))
+                {
+                    var param = tag["ToggleOff(".Length..^1].Trim();
+                    if (string.IsNullOrEmpty(param))
+                        param = output.name.ToUpperInvariant() + "_OFF";
+                    output.shaderKeywords.Add(param);
+                }
+                else if (tag.StartsWithSimple("KeywordEnum("))
+                {
+                    output.shaderKeywords.UnionWith(tag["KeywordEnum(".Length..^1].Split(',').Select(s => $"{output.name}_{s.Trim()}".ToUpperInvariant().Replace(' ', '_')));
                 }
             }
             switch (typeDefinition) {
@@ -816,8 +847,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
                     }
                     break;
             }
-            if (clearTagsOnPropertyParse)
-                tags.Clear();
+            tags.Clear();
             return output;
         }
 
@@ -887,7 +917,8 @@ namespace d4rkpl4y3r.AvatarOptimizer
             return (name, returnType);
         }
 
-        private static HashSet<string> FunctionParameterModifiers = new HashSet<string> {
+        private static HashSet<string> FunctionParameterModifiers = new()
+        {
             "in", "out", "inout",
             "point", "line", "triangle",
             "precise", "const", "uniform",
@@ -1070,16 +1101,6 @@ namespace d4rkpl4y3r.AvatarOptimizer
                 }
                 line = source[++sourceLineIndex];
             }
-            foreach (var declaration in output)
-            {
-                if (declaration.StartsWithSimple("#"))
-                    continue;
-                var match = Regex.Match(declaration, @"^((in|out|inout)\s)?\s*(\w+)\s+(\w+)(\s*:\s*\w+)?");
-                if (!match.Success)
-                {
-                    throw new ParserException("Unknown function parameter declaration: " + declaration);
-                }
-            }
             return output;
         }
 
@@ -1238,11 +1259,11 @@ namespace d4rkpl4y3r.AvatarOptimizer
         private void SemanticParseShader()
         {
             ParsedShader.Pass currentPass = null;
-            List<string> output = new List<string>();
-            List<string> cgInclude = new List<string>();
-            List<string> hlslInclude = new List<string>();
+            List<string> output = new();
+            List<string> cgInclude = new();
+            List<string> hlslInclude = new();
             List<string> lines = parsedShader.text[".shader"];
-            List<string> tags = new List<string>();
+            List<string> tags = new();
             parsedShader.text[".shader"] = output;
             parsedShader.mismatchedCurlyBraces = false;
             int curlyBraceDepth = 0;
@@ -1293,6 +1314,10 @@ namespace d4rkpl4y3r.AvatarOptimizer
                         {
                             parsedShader.properties.Add(property);
                             parsedShader.propertyTable[property.name] = property;
+                            foreach (var keyword in property.shaderKeywords)
+                            {
+                                parsedShader.keywordToProperty[keyword] = property;
+                            }
                             if (property.type == ParsedShader.Property.Type.Texture2D)
                             {
                                 parsedShader.texture2DProperties.Add(property);
@@ -1534,12 +1559,12 @@ namespace d4rkpl4y3r.AvatarOptimizer
         {
             public string name;
             public List<(string name, List<string> lines)> files;
-            public List<string> floatProperties = new List<string>();
-            public List<string> colorProperties = new List<string>();
-            public List<string> integerProperties = new List<string>();
-            public List<string> tex2DProperties = new List<string>();
-            public List<string> tex3DCubeProperties = new List<string>();
-            public List<string> unknownTypeProperties = new List<string>();
+            public List<string> floatProperties = new();
+            public List<string> colorProperties = new();
+            public List<string> integerProperties = new();
+            public List<string> tex2DProperties = new();
+            public List<string> tex3DCubeProperties = new();
+            public List<string> unknownTypeProperties = new();
             public ParsedShader originalShader;
 
             public void AddProperty(string name, string type)
@@ -1588,7 +1613,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
 
         private List<string> output;
         private ParsedShader.Pass currentPass;
-        private List<(string name, List<string> lines)> outputIncludes = new List<(string name, List<string> lines)>();
+        private List<(string name, List<string> lines)> outputIncludes = new();
         private List<string> pragmaOutput;
         private ParsedShader parsedShader;
         private int mergedMeshCount;
@@ -1609,12 +1634,12 @@ namespace d4rkpl4y3r.AvatarOptimizer
         private HashSet<string> texturesToCallSoTheSamplerDoesntDisappear;
         private List<string> setKeywords;
         private int curlyBraceDepth = 0;
-        private string sanitizedMaterialName;
+        private string sanitizedShaderName;
         private bool stripShadowVariants = false;
         private bool inlineReplaceConstants = false;
-        private Dictionary<string, string> constantPropertyValues = new Dictionary<string, string>();
-        private Dictionary<string, string> variableTypesThisPass = new Dictionary<string, string>();
-        private OptimizedShader optimizedShader = new OptimizedShader();
+        private Dictionary<string, string> constantPropertyValues = new();
+        private Dictionary<string, string> variableTypesThisPass = new();
+        private OptimizedShader optimizedShader = new();
 
         private ShaderOptimizer() {}
 
@@ -1630,7 +1655,6 @@ namespace d4rkpl4y3r.AvatarOptimizer
             Dictionary<string, string> animatedPropertyValues = null,
             List<string> setKeywords = null,
             Dictionary<string, bool> poiUsedPropertyDefines = null,
-            string sanitizedMaterialName = null,
             bool stripShadowVariants = false,
             Dictionary<string, bool[]> animatedPropertyOnMeshID = null
             )
@@ -1663,7 +1687,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
                 poiUsedPropertyDefines = poiUsedPropertyDefines ?? new Dictionary<string, bool>(),
                 animatedPropertyValues = animatedPropertyValues ?? new Dictionary<string, string>(),
                 setKeywords = setKeywords ?? new List<string>(),
-                sanitizedMaterialName = sanitizedMaterialName ?? Path.GetFileNameWithoutExtension(source.filePath),
+                sanitizedShaderName = $"s_{Path.GetFileNameWithoutExtension(source.filePath)}".Replace('\'', '_').Replace(' ', '_'),
                 stripShadowVariants = stripShadowVariants,
                 animatedPropertyOnMeshID = animatedPropertyOnMeshID ?? new Dictionary<string, bool[]>()
             };
@@ -1811,27 +1835,43 @@ namespace d4rkpl4y3r.AvatarOptimizer
             foreach (var animatedProperty in animatedPropertyValues)
             {
                 string name = animatedProperty.Key;
+                string isAnimatedCheck = localMeshCount > 32
+                    ? $"d4rkAvatarOptimizer{name}_IsAnimated[d4rkAvatarOptimizer_MeshID]"
+                    : $"((1u << d4rkAvatarOptimizer_MeshID) & d4rkAvatarOptimizer{name}_IsAnimatedMask) != 0";
+                bool foundAnimatedPropertyOnMeshID = animatedPropertyOnMeshID.TryGetValue(name, out var onMeshID);
+                bool skipAnimatedCheck = foundAnimatedPropertyOnMeshID && mergedMeshIndices.All(i => onMeshID[i]);
+                if (localMeshCount > 1)
+                {
+                    output.Add($"#if !defined(SHADER_API_D3D11)");
+                    output.Add("{");
+                    foreach (int i in mergedMeshIndices)
+                    {
+                        string currentIndex = $"d4rkAvatarOptimizer{name}_ArrayIndex{i}";
+                        if (!foundAnimatedPropertyOnMeshID)
+                        {
+                            currentIndex = $"(isnan(asfloat(asuint({currentIndex}.x) ^ asuint(d4rkAvatarOptimizer_Zero))) ? {name} : {currentIndex})";
+                        }
+                        output.Add($"{name} = {i - mergedMeshIndices.First()} == d4rkAvatarOptimizer_MeshID ? "
+                            + (skipAnimatedCheck || !foundAnimatedPropertyOnMeshID ? $"{currentIndex}" : $"({isAnimatedCheck} ? {currentIndex} : {name})")
+                            + $" : {name};");
+                    }
+                    output.Add("}");
+                    output.Add($"#else");
+                }
                 string animatedValue = localMeshCount > 1
                     ? $"{CBufferAliasArray[name].name}[{CBufferAliasArray[name].offset} + d4rkAvatarOptimizer_MeshID]"
                     : $"d4rkAvatarOptimizer{name}_ArrayIndex{mergedMeshIndices.First()}";
-                if (animatedPropertyOnMeshID.TryGetValue(name, out var onMeshID))
+                if (foundAnimatedPropertyOnMeshID)
                 {
-                    if (mergedMeshIndices.All(i => onMeshID[i]))
-                    {
-                        output.Add($"{name} = {animatedValue};");
-                    }
-                    else if (localMeshCount > 32)
-                    {
-                        output.Add($"{name} = d4rkAvatarOptimizer{name}_IsAnimated[d4rkAvatarOptimizer_MeshID] ? {animatedValue} : {name};");
-                    }
-                    else
-                    {
-                        output.Add($"{name} = ((1u << d4rkAvatarOptimizer_MeshID) & d4rkAvatarOptimizer{name}_IsAnimatedMask) != 0 ? {animatedValue} : {name};");
-                    }
+                    output.Add($"{name} = {(skipAnimatedCheck ? animatedValue : $"{isAnimatedCheck} ? {animatedValue} : {name}")};");
                 }
                 else
                 {
                     output.Add($"{name} = isnan(asfloat(asuint({animatedValue}.x) ^ asuint(d4rkAvatarOptimizer_Zero))) ? {name} : {animatedValue};");
+                }
+                if (localMeshCount > 1)
+                {
+                    output.Add($"#endif");
                 }
             }
         }
@@ -2282,8 +2322,8 @@ namespace d4rkpl4y3r.AvatarOptimizer
                 lineIndex = sourceLineIndex;
                 functionDefinition = ShaderAnalyzer.ParseFunctionParametersWithPreprocessorStatements(source, ref lineIndex);
                 sourceLineIndex = lineIndex;
-            } catch (ShaderAnalyzer.ParserException) {
-                Debug.LogWarning($"Failed to parse function parameters for function {func.name}. Skipping duplication.");
+            } catch (ShaderAnalyzer.ParserException e) {
+                Debug.LogWarning($"Failed to parse function parameters for function {func.name}. Skipping duplication.\n{e.Message}");
                 output.Add(source[sourceLineIndex]);
                 return;
             }
@@ -2368,6 +2408,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
                 }
             }
 
+            output.Add("#if defined(SHADER_API_D3D11)");
             output.Add("if (d4rkAvatarOptimizer_Zero)");
             output.Add("{");
             output.Add($"float d4rkAvatarOptimizer_val = {valuesToDummyUse.Pop()};");
@@ -2381,6 +2422,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
             }
             output.Add("if (d4rkAvatarOptimizer_val) " + nullReturn);
             output.Add("}");
+            output.Add("#endif");
         }
 
         private void InjectIsActiveMeshCheck(string nullReturn)
@@ -2388,13 +2430,26 @@ namespace d4rkpl4y3r.AvatarOptimizer
             if (mergedMeshCount <= 1)
                 return;
             if (localMeshCount > 1)
+            {
+                output.Add("#if defined(SHADER_API_D3D11)");
                 output.Add($"if (0.5 > d4rkAvatarOptimizerAnimatedScalars[d4rkAvatarOptimizer_MeshID]) {nullReturn}");
+                output.Add("#else");
+                output.Add("{");
+                output.Add($"bool isActive = true;");
+                foreach (int i in mergedMeshIndices)
+                {
+                    output.Add($"isActive = {i - mergedMeshIndices.First()} == d4rkAvatarOptimizer_MeshID ? _IsActiveMesh{i} > 0.5 : isActive;");
+                }
+                output.Add($"if (!isActive) {nullReturn}");
+                output.Add("}");
+                output.Add("#endif");
+            }
             else
                 output.Add($"if (0.5 > _IsActiveMesh{mergedMeshIndices.First()}) {nullReturn}");
         }
 
         private bool hasVectorCBufferAliasArray = false;
-        private Dictionary<string, (string name, int offset)> CBufferAliasArray = new Dictionary<string, (string name, int offset)>();
+        private Dictionary<string, (string name, int offset)> CBufferAliasArray = new();
 
         private int AllocateCBufferRegisters(int index, HashSet<int> usedRegisters)
         {
@@ -2409,7 +2464,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
             return index;
         }
 
-        private static readonly List<string> SkippedShaderVariants = new List<string> () {
+        private static readonly List<string> SkippedShaderVariants = new() {
             "DYNAMICLIGHTMAP_ON",
             "LIGHTMAP_ON",
             "LIGHTMAP_SHADOW_MIXING",
@@ -2452,10 +2507,12 @@ namespace d4rkpl4y3r.AvatarOptimizer
                 var usedScalarRegisters = new HashSet<int>();
                 var usedVectorRegisters = new HashSet<int>();
                 var scalarOutput = new List<string>();
+                var glOutput = new List<string>();
                 var vectorOutput = new List<string>();
                 foreach (int i in mergedMeshIndices)
                 {
                     scalarOutput.Add($"float _IsActiveMesh{i} : packoffset(c{i - mergedMeshIndices.First()});");
+                    glOutput.Add($"float _IsActiveMesh{i};");
                 }
                 CBufferAliasArray.Add("_IsActiveMesh", ("d4rkAvatarOptimizerAnimatedScalars", 0));
                 int currentScalarPackOffset = AllocateCBufferRegisters(0, usedScalarRegisters);
@@ -2483,8 +2540,10 @@ namespace d4rkpl4y3r.AvatarOptimizer
                     foreach (int i in mergedMeshIndices)
                     {
                         currentOutput.Add($"{type} d4rkAvatarOptimizer{name}_ArrayIndex{i} : packoffset(c{currentPackOffset + i - mergedMeshIndices.First()});");
+                        glOutput.Add($"{type} d4rkAvatarOptimizer{name}_ArrayIndex{i};");
                     }
                 }
+                output.Add("#if defined(SHADER_API_D3D11)");
                 output.Add("cbuffer d4rkAvatarOptimizerAnimatedScalars");
                 output.Add("{");
                 if (localMeshCount > 1)
@@ -2500,6 +2559,9 @@ namespace d4rkpl4y3r.AvatarOptimizer
                     output.AddRange(vectorOutput);
                     output.Add("};");
                 }
+                output.Add("#else");
+                output.AddRange(glOutput);
+                output.Add("#endif");
                 foreach (var animatedPropertyMask in animatedPropertyOnMeshID)
                 {
                     string name = animatedPropertyMask.Key;
@@ -2714,8 +2776,8 @@ namespace d4rkpl4y3r.AvatarOptimizer
             Unknown
         }
         private Stack<ConditionResult> lastIfEvalResultStack;
-        private Stack<Dictionary<string, (bool defined, int? value)>> knownDefines = new Stack<Dictionary<string, (bool defined, int? value)>>();
-        private Stack<HashSet<string>> alreadyIncludedFiles = new Stack<HashSet<string>>();
+        private Stack<Dictionary<string, (bool defined, int? value)>> knownDefines = new();
+        private Stack<HashSet<string>> alreadyIncludedFiles = new();
         private void PushPreprocessorScope()
         {
             knownDefines.Push(new Dictionary<string, (bool defined, int? value)>(knownDefines.Peek()));
@@ -3343,7 +3405,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
             debugOutput?.Add($"// didn't find matching #endex, skipped {linesSkipped} lines");
         }
         
-        static readonly HashSet<string> shaderPropertiesToKeep = new HashSet<string>()
+        static readonly HashSet<string> shaderPropertiesToKeep = new()
         {
             // copied by vrchat shader fallback system
             "_MainTex",
@@ -3559,7 +3621,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
                     {
                         throw new ShaderAnalyzer.ParserException($"Unbalanced curly braces in {parsedShader.name} pass {passID}");
                     }
-                    var includeName = $"{sanitizedMaterialName}_{GetMD5Hash(output).Substring(0, 8)}" + (line == "CGPROGRAM" ? ".cginc" : ".hlsl");
+                    var includeName = $"{sanitizedShaderName}-{GetMD5Hash(output)[..12]}" + (line == "CGPROGRAM" ? ".cginc" : ".hlsl");
                     outputIncludes.Add((includeName, output));
                     output = pragmaOutput;
                     output.Add($"#include \"{includeName}\"");
@@ -3597,7 +3659,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
                 if (texturesToMerge.Contains(prop.name))
                 {
                     int index = prop.type.LastIndexOf("2D");
-                    prop.type = prop.type.Substring(0, index) + "2DArray" + prop.type.Substring(index + 2);
+                    prop.type = prop.type.Insert(index + 2, "Array");
                     if (prop.name == "_MainTex")
                         prop.name = "_MainTexButNotQuiteSoThatUnityDoesntCry";
                 }
@@ -3606,10 +3668,15 @@ namespace d4rkpl4y3r.AvatarOptimizer
             }
             output.InsertRange(propertyBlockInsertionIndex, propertyBlock);
             var shaderHash = GetMD5Hash(output);
-            optimizedShader.files = new List<(string name, List<string> lines)>();
-            optimizedShader.files.Add(("Shader", output));
+            // add the first 4 characters of the overall shader hash to the include filenames so that the includes get sorted right below their respective shaders
+            outputIncludes = outputIncludes.Select(oi => {
+                var newName = oi.name.Insert(oi.name.LastIndexOf('-'), $"_{shaderHash[..4]}");
+                output = output.Select(line => line.Replace(oi.name, newName)).ToList();
+                return (newName, oi.lines);
+            }).ToList();
+            optimizedShader.files = new() { ("Shader", output) };
             optimizedShader.files.AddRange(outputIncludes);
-            optimizedShader.SetName($"{sanitizedMaterialName} {shaderHash.Substring(0, 8)}");
+            optimizedShader.SetName($"{sanitizedShaderName}_{shaderHash[..4]}_{shaderHash[4..12]}");
         }
     }
 }

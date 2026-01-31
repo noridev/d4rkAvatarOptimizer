@@ -5,13 +5,11 @@ using VRC.SDK3.Dynamics.Contact.Components;
 using VRC.SDK3.Dynamics.PhysBone.Components;
 using System.Text.RegularExpressions;
 using Array = System.Array;
+using System.IO;
 
 #if UNITY_EDITOR
-using System.Threading;
 using System.Threading.Tasks;
-using System.Globalization;
 using UnityEngine.Rendering;
-using UnityEngine.Animations;
 using UnityEditor;
 using UnityEditor.Animations;
 using d4rkpl4y3r.AvatarOptimizer;
@@ -91,9 +89,17 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
     {
         public Renderer renderer;
         public int index;
-        public Material material
+        public readonly Material material
         {
-            get { return renderer.sharedMaterials[index]; }
+            get
+            {
+                if (renderer == null || index < 0)
+                    return null;
+                var materials = renderer.sharedMaterials;
+                if (index >= materials.Length)
+                    return null;
+                return materials[index];
+            }
         }
         public MaterialSlot(Renderer renderer, int index)
         {
@@ -115,18 +121,33 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             return renderer.GetSharedMesh()?.GetTopology(Math.Min(index, renderer.GetSharedMesh().subMeshCount - 1)) ?? MeshTopology.Triangles;
         }
 #endif
+        public override bool Equals(object obj)
+        {
+            if (obj is MaterialSlot other)
+            {
+                return renderer == other.renderer && index == other.index;
+            }
+            return false;
+        }
+        public override int GetHashCode()
+        {
+            return (renderer == null ? 0 : renderer.GetHashCode()) ^ index.GetHashCode();
+        }
+        public static bool operator ==(MaterialSlot a, MaterialSlot b) => a.Equals(b);
+        public static bool operator !=(MaterialSlot a, MaterialSlot b) => !a.Equals(b);
     }
 
 #if UNITY_EDITOR
+    private bool isOptimizing = false;
 
     public void Optimize()
     {
-        var oldCulture = Thread.CurrentThread.CurrentCulture;
-        var oldUICulture = Thread.CurrentThread.CurrentUICulture;
+        using var _ = new InvariantCultureScope();
         try
         {
-            Thread.CurrentThread.CurrentCulture = CultureInfo.InvariantCulture;
-            Thread.CurrentThread.CurrentUICulture = CultureInfo.InvariantCulture;
+            isOptimizing = true;
+            Profiler.enabled = true;
+            Profiler.Reset();
             DisplayProgressBar("Clear TrashBin Folder", 0.01f);
             ClearTrashBin();
             Profiler.StartSection("ClearCaches()");
@@ -141,6 +162,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             constantAnimatedValuesToAdd.Clear();
             animatedMaterialPropertyDefaultValues.Clear();
             ClearCaches();
+            LogAvatarStats($"Avatar stats for '{GetAvatarDescriptor().name}' before optimization:");
             DisplayProgressBar("Destroying unused components", 0.2f);
             Profiler.StartNextSection("DestroyEditorOnlyGameObjects()");
             DestroyEditorOnlyGameObjects();
@@ -153,8 +175,9 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             {
                 DisplayProgressBar("Parsing Shaders", 0.05f);
                 Profiler.StartNextSection("ParseAndCacheAllShaders()");
-                ShaderAnalyzer.ParseAndCacheAllShaders(FindAllUsedMaterials().Select(m => m.shader), true,
+                var shaders = ShaderAnalyzer.ParseAndCacheAllShaders(FindAllUsedMaterials().Select(m => m.shader), true,
                     (done, total) => DisplayProgressBar($"Parsing Shaders ({done}/{total})", 0.05f + 0.15f * done / total));
+                LogShaderParseResult(shaders);
             }
             physBonesToDisable = FindAllPhysBonesToDisable();
             Profiler.StartNextSection("ConvertStaticMeshesToSkinnedMeshes()");
@@ -187,15 +210,26 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             Profiler.StartNextSection("MoveRingFingerColliderToFeet()");
             DisplayProgressBar("Done", 1.0f);
             MoveRingFingerColliderToFeet();
+            LogAvatarStats("Avatar stats after optimization:");
             Profiler.StartNextSection("DestroyImmediate(this)");
+            var t = transform;
             DestroyImmediate(this);
+            if (t.childCount == 0 && t.GetComponents<Component>().Length == 1)
+                DestroyImmediate(t.gameObject);
             Profiler.EndSection();
+            if (settings.ProfileTimeUsed)
+                Profiler.PrintTimeUsed();
+            LogToFile(string.Join("\n  - ", Profiler.FormatTimeUsed()));
+        }
+        catch (System.Exception e)
+        {
+            LogToFile("An error occurred during optimization:\n" + e.ToString());
+            throw;
         }
         finally
         {
-            Thread.CurrentThread.CurrentCulture = oldCulture;
-            Thread.CurrentThread.CurrentUICulture = oldUICulture;
             EditorUtility.ClearProgressBar();
+            ImportLogFile();
         }
     }
 
@@ -443,6 +477,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
     private Dictionary<Transform, Transform> movingParentMap = new Dictionary<Transform, Transform>();
     private Dictionary<string, Transform> transformFromOldPath = new Dictionary<string, Transform>();
     private Dictionary<EditorCurveBinding, float> constantAnimatedValuesToAdd = new Dictionary<EditorCurveBinding, float>();
+    private Dictionary<string, List<MaterialSlot>> materialSlotsToDisableWhenOriginalPathMeshIsDisabled = new();
     // blendshape names come from https://www.deviantart.com/xoriu/art/MMD-Facial-Expressions-Chart-341504917
     private static HashSet<string> MMDBlendShapes = new HashSet<string>()
     {
@@ -522,6 +557,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
 
     private void DisplayProgressBar(string text)
     {
+        var name = GetRootTransform().name;
         var titleName = name.EndsWith("(BrokenCopy)") ? name.Substring(0, name.Length - "(BrokenCopy)".Length) : name;
         EditorUtility.DisplayProgressBar("Optimizing " + titleName, text, progressBar);
     }
@@ -532,28 +568,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
         DisplayProgressBar(text);
     }
 
-    public static string GetTrashBinPath()
-    {
-        var path = AssetDatabase.GUIDToAssetPath(AssetDatabase.FindAssets("d4rkAvatarOptimizer")[0]);
-        packageRootPath = path.Substring(0, path.LastIndexOf('/'));
-        packageRootPath = packageRootPath.Substring(0, packageRootPath.LastIndexOf('/'));
-        var trashBinRoot = packageRootPath;
-        var packageInfo = UnityEditor.PackageManager.PackageInfo.FindForAssetPath(path);
-        if (packageInfo?.source != UnityEditor.PackageManager.PackageSource.Embedded)
-        {
-            trashBinRoot = "Assets/d4rkAvatarOptimizer";
-            if (!AssetDatabase.IsValidFolder("Assets/d4rkAvatarOptimizer"))
-            {
-                AssetDatabase.CreateFolder("Assets", "d4rkAvatarOptimizer");
-            }
-        }
-        trashBinPath = trashBinRoot + "/TrashBin/";
-        if (!AssetDatabase.IsValidFolder(trashBinRoot + "/TrashBin"))
-        {
-            AssetDatabase.CreateFolder(trashBinRoot, "TrashBin");
-        }
-        return trashBinPath;
-    }
+    private d4rkpl4y3r.AvatarOptimizer.Util.Logger log = null;
 
     private void ClearTrashBin()
     {
@@ -576,6 +591,29 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
         AssetDatabase.CreateFolder(trashBinRoot, "TrashBin");
         binaryAssetBundlePath = null;
         materialAssetBundlePath = null;
+        log = new (Path.Combine(trashBinPath, "_log.txt"));
+        LogToFile($"d4rk Avatar Optimizer v{packageInfo.version}");
+        LogToFile("Custom by NoriDev.");
+        LogToFile($"Unity Version: {Application.unityVersion}");
+        LogToFile($"Application.isPlaying: {Application.isPlaying}");
+        LogToFile($"Build Target: {EditorUserBuildSettings.activeBuildTarget}");
+        LogToFile($"SystemInfo.graphicsDeviceType: {SystemInfo.graphicsDeviceType}");
+        LogToFile("Global Settings:");
+        using (log.IndentScope())
+        {
+            LogToFile($"- Always Optimize on Upload: {AvatarOptimizerSettings.DoOptimizeWithDefaultSettingsWhenNoComponent}");
+            LogToFile($"- Optimize in Play Mode: {AvatarOptimizerSettings.DoOptimizeInPlayMode}");
+            LogToFile($"- Auto Refresh Preview Timeout: {AvatarOptimizerSettings.AutoRefreshPreviewTimeout} ms");
+            LogToFile($"- Motion Time Approximation Sample Count: {AvatarOptimizerSettings.MotionTimeApproximationSampleCount}");
+        }
+        LogToFile("Settings:");
+        using (log.IndentScope())
+        {
+            foreach (var field in typeof(Settings).GetFields())
+            {
+                LogToFile($"- {GetDisplayName(field.Name)}: {field.GetValue(settings)}");
+            }
+        }
         Profiler.EndSection();
     }
 
@@ -610,6 +648,174 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
         Profiler.EndSection();
     }
 
+    private void LogToFile(string message, int extraIndent = 0)
+    {
+        if (!isOptimizing || log == null)
+            return;
+        using var _ = new Profiler.Section("LogToFile()");
+        log.indentLevel += extraIndent;
+        log.Append(message);
+        log.indentLevel -= extraIndent;
+    }
+
+    private void ImportLogFile()
+    {
+        if (log == null)
+            return;
+        log.Flush();
+        AssetDatabase.ImportAsset(log.filePath);
+    }
+
+    private void LogShaderParseResult(List<ParsedShader> shaders)
+    {
+        if (shaders.Count == 0)
+            return;
+        var filtered = shaders.Distinct().OrderBy(s => s.name).ToList();
+        var unmergeable = filtered.Where(s => !s.CanMerge()).ToList();
+        var mergeable = filtered.Where(s => s.CanMerge()).ToList();
+        LogToFile($"Parsed {filtered.Count} shaders:");
+        if (mergeable.Count > 0)
+        {
+            LogToFile($"- {mergeable.Count} mergeable shaders:", 1);
+            foreach (var shader in mergeable)
+            {
+                LogToFile($"- {shader.name}", 2);
+            }
+        }
+        if (unmergeable.Count > 0)
+        {
+            LogToFile($"- {unmergeable.Count} unmergeable shaders:", 1);
+            var groupedByMessage = unmergeable.GroupBy(s => s.CantMergeReason()).OrderBy(g => g.Count()).ToList();
+            foreach (var group in groupedByMessage)
+            {
+                LogToFile($"- {group.Key}", 2);
+                foreach (var shader in group)
+                {
+                    LogToFile($"- {shader.name}", 3);
+                }
+            }
+        }
+    }
+
+    private void LogAvatarStats(string header)
+    {
+        using var _ = new Profiler.Section("LogAvatarStats()");
+        LogToFile(header);
+        using var __ = log.IndentScope();
+        var av = GetAvatarDescriptor();
+        var components = av.GetComponentsInChildren<Component>(true).GroupBy(c => c.GetType()).OrderByDescending(g => g.Count()).ThenBy(g => g.Key.FullName).ToArray();
+        LogToFile($"- Total Component Types: {components.Length}");
+        foreach (var group in components)
+        {
+            LogToFile($"- {group.Key}: {group.Count()}", 1);
+        }
+        var renderers = components.Where(g => g.Key == typeof(MeshRenderer) || g.Key == typeof(SkinnedMeshRenderer)).SelectMany(g => g).Cast<Renderer>().ToArray();
+        var skinnedMeshRenderers = components.Where(g => g.Key == typeof(SkinnedMeshRenderer)).SelectMany(g => g).Cast<SkinnedMeshRenderer>().ToArray();
+        LogToFile($"- Total Poly Count: {renderers.Sum(r => GetRendererPolyCount(r))}");
+        LogToFile($"- Total BlendShapes: {skinnedMeshRenderers.Sum(r => r.sharedMesh == null ? 0 : r.sharedMesh.blendShapeCount)}");
+        LogToFile($"- Renderer Material Slots: {renderers.Sum(r => r.sharedMaterials.Length)}");
+
+        var animatorControllers = av.baseAnimationLayers.Concat(av.specialAnimationLayers).Select(l => l.animatorController).Where(c => c != null).Distinct().Cast<AnimatorController>().ToArray();
+        var animatorLayers = animatorControllers.SelectMany(c => c.layers).ToArray();
+        LogToFile($"- Animator Layers: {animatorLayers.Length}");
+        static int CalculateBlendTreePerfRank(BlendTree tree)
+        {
+            if (tree == null)
+                return 0;
+            if (tree.blendType == BlendTreeType.Direct)
+            {
+                return tree.children.Sum(c =>
+                {
+                    if (c.motion is AnimationClip)
+                        return 1;
+                    if (c.motion is BlendTree subTree)
+                        return CalculateBlendTreePerfRank(subTree);
+                    return 0;
+                });
+            }
+            else
+            {
+                int worst = 0;
+                foreach (var c in tree.children)
+                {
+                    int rank = 0;
+                    if (c.motion is AnimationClip)
+                        rank = 1;
+                    else if (c.motion is BlendTree subTree)
+                        rank = CalculateBlendTreePerfRank(subTree);
+                    if (rank > worst)
+                        worst = rank;
+                }
+                return tree.blendType == BlendTreeType.Simple1D ? worst * 2 : worst * 3;
+            }
+        }
+        int blendTreeRank = animatorLayers.Sum(l => l == null || l.stateMachine == null ? 0
+            : l.stateMachine.EnumerateAllStates().Select(s => CalculateBlendTreePerfRank(s.motion as BlendTree)).Aggregate(0, (a, b) => a > b ? a : b));
+        LogToFile($"- Blend Tree Perf Rank: {blendTreeRank}");
+        // a single layer with a simple toggle is approximately 4 times as expensive a simple 1d blend tree inside a direct blend tree
+        // from: https://vrc.school/docs/Other/Benchmarks/#direct-blend-trees
+        // 1d inside direct is 2 score so the layer is 8 score
+        LogToFile($"- Animator Complexity Score: {animatorLayers.Length * 8 + blendTreeRank}");
+        var animationClipCount = animatorControllers.SelectMany(c => c.animationClips).Distinct().Count();
+        LogToFile($"- Animation Clip Count: {animationClipCount}");
+    }
+
+    private VRCAvatarDescriptor cache_avatarDescriptor = null;
+    public VRCAvatarDescriptor GetAvatarDescriptor()
+    {
+        if (cache_avatarDescriptor != null)
+            return cache_avatarDescriptor;
+        cache_avatarDescriptor = null;
+        var current = transform;
+        while (current != null)
+        {
+            if (current.TryGetComponent<VRCAvatarDescriptor>(out var descriptor))
+            {
+                cache_avatarDescriptor = descriptor;
+                break;
+            }
+            current = current.parent;
+        }
+        return cache_avatarDescriptor;
+    }
+
+    private HashSet<string> cache_toolsUsedOnAvatar = null;
+    private long lastToolsCheckTime = 0;
+    public HashSet<string> GetNonDestructiveToolsUsedOnAvatar()
+    {
+        if (System.DateTime.Now.Ticks - lastToolsCheckTime > System.TimeSpan.TicksPerMinute * 2)
+        {
+            cache_toolsUsedOnAvatar = null;
+            lastToolsCheckTime = System.DateTime.Now.Ticks;
+        }
+        if (cache_toolsUsedOnAvatar != null)
+            return cache_toolsUsedOnAvatar;
+        var tools = new HashSet<string>();
+        var descriptor = GetAvatarDescriptor();
+        if (descriptor == null)
+            return tools;
+        var allComponentTypes = new HashSet<Type>(descriptor.GetComponentsInChildren<Component>(true).Where(c => c != null).Select(c => c.GetType()));
+        if (allComponentTypes.Any(t => t.FullName.StartsWithSimple("nadena.dev.modular_avatar.core.")))
+        {
+            tools.Add("Modular Avatar");
+        }
+        if (allComponentTypes.Any(t => t.FullName == "VF.Model.VRCFury" || t.FullName.StartsWithSimple("VF.Component.")))
+        {
+            tools.Add("VRCFury");
+        }
+        if (allComponentTypes.Any(t => t.FullName.StartsWithSimple("Prefabulous.Universal.Common.Runtime.")))
+        {
+            tools.Add("Prefabulous Avatar");
+        }
+        return cache_toolsUsedOnAvatar = tools;
+    }
+
+    public Transform GetRootTransform()
+    {
+        var descriptor = GetAvatarDescriptor();
+        return descriptor == null ? transform : descriptor.transform;
+    }
+
     private static string GetTransformPathTo(Transform t, Transform root)
     {
         if (t == root)
@@ -626,15 +832,15 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
 
     public string GetTransformPathToRoot(Transform t)
     {
-        return GetTransformPathTo(t, transform);
+        return GetTransformPathTo(t, GetRootTransform());
     }
 
     public Transform GetTransformFromPath(string path)
     {
         if (path == "")
-            return transform;
+            return GetRootTransform();
         string[] pathParts = path.Split('/');
-        Transform t = transform;
+        Transform t = GetRootTransform();
         for (int i = 0; i < pathParts.Length; i++)
         {
             t = t.Find(pathParts[i]);
@@ -664,21 +870,22 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                 field.SetValue(this, null);
             }
         }
+        MaterialAssetComparer.ClearCache();
+    }
+
+    public long GetRendererPolyCount(Renderer renderer)
+    {
+        if (renderer == null || !(renderer is SkinnedMeshRenderer || renderer is MeshRenderer))
+            return 0;
+        var mesh = renderer.GetSharedMesh();
+        if (mesh == null)
+            return 0;
+        return Enumerable.Range(0, mesh.subMeshCount).Sum(i => mesh.GetIndexCount(i) / (mesh.GetTopology(i) == MeshTopology.Quads ? 2 : 3));
     }
 
     public long GetPolyCount()
     {
-        long polyCount = 0;
-        foreach (var renderer in GetUsedComponentsInChildren<Renderer>())
-        {
-            if (!(renderer is SkinnedMeshRenderer || renderer is MeshRenderer))
-                continue;
-            var mesh = renderer.GetSharedMesh();
-            if (mesh == null)
-                continue;
-            polyCount += Enumerable.Range(0, mesh.subMeshCount).Sum(i => mesh.GetIndexCount(i) / 3);
-        }
-        return polyCount;
+        return GetUsedComponentsInChildren<Renderer>().Sum(r => GetRendererPolyCount(r));
     }
 
     private Dictionary<Renderer, List<ParticleSystem>> cache_ParticleSystemsUsingRenderer = null;
@@ -723,9 +930,31 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
         return true;
     }
 
+    private Dictionary<Renderer, bool> cache_UsesUV0ZW = null;
+    private bool UsesUV0ZW(Renderer renderer)
+    {
+        if (renderer == null)
+            return false;
+        cache_UsesUV0ZW ??= new Dictionary<Renderer, bool>();
+        if (cache_UsesUV0ZW.TryGetValue(renderer, out var cachedResult))
+            return cachedResult;
+        var mesh = renderer.GetSharedMesh();
+        if (mesh == null)
+            return cache_UsesUV0ZW[renderer] = false;
+        for (int i = 0; i < mesh.vertexAttributeCount; i++)
+        {
+            var attr = mesh.GetVertexAttribute(i);
+            if (attr.attribute == VertexAttribute.TexCoord0 && (attr.dimension == 3 || attr.dimension == 4))
+                return cache_UsesUV0ZW[renderer] = true;
+        }
+        return cache_UsesUV0ZW[renderer] = false;
+    }
+
     private bool IsShaderToggleCombinableRenderer(Renderer candidate)
     {
         if (!IsBasicCombinableRenderer(candidate))
+            return false;
+        if (UsesUV0ZW(candidate))
             return false;
         foreach (var slot in MaterialSlot.GetAllSlotsFrom(candidate))
         {
@@ -776,7 +1005,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             return false;
         bool OneOfParentsHasGameObjectToggleThatTheOthersArentChildrenOf(Transform t, string[] otherPaths)
         {
-            while ((t = t.parent) != transform)
+            while ((t = t.parent) != GetRootTransform())
             {
                 var path = GetPathToRoot(t);
                 if (FindAllGameObjectTogglePaths().Contains(path) && otherPaths.All(p => !p.StartsWith(path)))
@@ -794,6 +1023,8 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             if (list.Any(r => GetRendererDefaultEnabledState(r) != candidateDefaultEnabledState))
                 return false;
         }
+        if (!list.All(r => UsesUV0ZW(r) == UsesUV0ZW(candidate)))
+            return false;
         if (CanCombineRendererWithBasicMerge(list, candidate, true))
             return true;
         if (!MergeSkinnedMeshesWithShaderToggle)
@@ -1149,7 +1380,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
 
     public bool UsesAnyLayerMasks()
     {
-        var avDescriptor = GetComponent<VRCAvatarDescriptor>();
+        var avDescriptor = GetAvatarDescriptor();
         if (avDescriptor == null)
             return false;
         var playableLayers = avDescriptor.baseAnimationLayers.Union(avDescriptor.specialAnimationLayers).ToArray();
@@ -1168,7 +1399,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
     {
         var togglePaths = FindAllGameObjectTogglePaths();
         var unused = new HashSet<SkinnedMeshRenderer>();
-        var skinnedMeshRenderers = GetComponentsInChildren<SkinnedMeshRenderer>(true);
+        var skinnedMeshRenderers = GetRootTransform().GetComponentsInChildren<SkinnedMeshRenderer>(true);
         var exclusions = GetAllExcludedTransforms();
         foreach (var skinnedMeshRenderer in skinnedMeshRenderers)
         {
@@ -1248,7 +1479,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                 mergedMeshes.Remove(meshRenderer);
             }
         }
-        var avDescriptor = GetComponent<VRCAvatarDescriptor>();
+        var avDescriptor = GetAvatarDescriptor();
         foreach (var subList in matchedSkinnedMeshes)
         {
             if (subList.Count == 1)
@@ -1366,7 +1597,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             animatableBindings = new Dictionary<Type, HashSet<string>>();
             GameObject targetObject = GetTransformFromPath(binding.path)?.gameObject;
             if (targetObject != null) {
-                foreach (var animatableBinding in AnimationUtility.GetAnimatableBindings(targetObject, gameObject)) {
+                foreach (var animatableBinding in AnimationUtility.GetAnimatableBindings(targetObject, GetRootTransform().gameObject)) {
                     var name = animatableBinding.propertyName;
                     var type = animatableBinding.type;
                     if (!animatableBindings.TryGetValue(type, out var animatableProperties)) {
@@ -1424,6 +1655,20 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
 
         return false;
     }
+
+    private Material cache_DisabledMaterial = null;
+    private Material GetDisabledMaterial()
+    {
+        if (cache_DisabledMaterial == null)
+        {
+            cache_DisabledMaterial = new Material(Shader.Find(
+                HasCustomShaderSupport ? "d4rkpl4y3r/Optimizer/DisabledMaterial" : "VRChat/Mobile/Particles/Additive"));
+            cache_DisabledMaterial.name = "d4rkAvatarOptimizer_DisabledMaterial";
+            cache_DisabledMaterial.SetShaderPassEnabled("Always", false);
+            CreateUniqueAsset(cache_DisabledMaterial, "d4rkAvatarOptimizer_DisabledMaterial.mat");
+        }
+        return cache_DisabledMaterial;
+    }
     
     private Dictionary<float, AnimationClip> cache_DummyAnimationClipOfLength = null;
     private AnimationClip FixAnimationClipPaths(AnimationClip clip)
@@ -1434,30 +1679,52 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
         newClip.ClearCurves();
         newClip.name = clip.name;
         bool changed = false;
+        var removedBindings = new List<EditorCurveBinding>();
+        var addedBindings = new List<EditorCurveBinding>();
+        var changedBindings = new List<(EditorCurveBinding from, EditorCurveBinding to)>();
         float lastUsedKeyframeTime = -1;
         float lastUnusedKeyframeTime = -1;
         void SetFloatCurve(AnimationClip clipToSet, EditorCurveBinding bindingToSet, AnimationCurve curveToSet) {
             if (IsAnimatableBinding(bindingToSet)) {
-                lastUsedKeyframeTime = Mathf.Max(curveToSet.length > 0 ? curveToSet.keys[curveToSet.length - 1].time : 0, lastUsedKeyframeTime);
+                lastUsedKeyframeTime = Mathf.Max(curveToSet.length > 0 ? curveToSet.keys[^1].time : 0, lastUsedKeyframeTime);
                 AnimationUtility.SetEditorCurve(clipToSet, bindingToSet, curveToSet);
             } else {
-                lastUnusedKeyframeTime = Mathf.Max(curveToSet.length > 0 ? curveToSet.keys[curveToSet.length - 1].time : 0, lastUnusedKeyframeTime);
+                lastUnusedKeyframeTime = Mathf.Max(curveToSet.length > 0 ? curveToSet.keys[^1].time : 0, lastUnusedKeyframeTime);
                 changed = true;
+                removedBindings.Add(bindingToSet);
             }
         }
         void SetObjectReferenceCurve(AnimationClip clipToSet, EditorCurveBinding bindingToSet, ObjectReferenceKeyframe[] curveToSet) {
             if (IsAnimatableBinding(bindingToSet)) {
-                lastUsedKeyframeTime = Mathf.Max(curveToSet.Length > 0 ? curveToSet[curveToSet.Length - 1].time : 0, lastUsedKeyframeTime);
+                lastUsedKeyframeTime = Mathf.Max(curveToSet.Length > 0 ? curveToSet[^1].time : 0, lastUsedKeyframeTime);
                 AnimationUtility.SetObjectReferenceCurve(clipToSet, bindingToSet, curveToSet);
             } else {
-                lastUnusedKeyframeTime = Mathf.Max(curveToSet.Length > 0 ? curveToSet[curveToSet.Length - 1].time : 0, lastUnusedKeyframeTime);
+                lastUnusedKeyframeTime = Mathf.Max(curveToSet.Length > 0 ? curveToSet[^1].time : 0, lastUnusedKeyframeTime);
                 changed = true;
+                removedBindings.Add(bindingToSet);
             }
         }
         foreach (var binding in AnimationUtility.GetCurveBindings(clip))
         {
             var curve = AnimationUtility.GetEditorCurve(clip, binding);
             var fixedBinding = FixAnimationBinding(binding, ref changed);
+            bool isRendererToggleBinding = (typeof(Renderer).IsAssignableFrom(binding.type) && binding.propertyName == "m_Enabled")
+                || (binding.type == typeof(GameObject) && binding.propertyName == "m_IsActive");
+            if (isRendererToggleBinding
+                && materialSlotsToDisableWhenOriginalPathMeshIsDisabled.TryGetValue(binding.path, out var slotsToDisable))
+            {
+                foreach (var slot in slotsToDisable)
+                {
+                    var matSwapBinding = EditorCurveBinding.PPtrCurve(GetPathToRoot(slot.renderer), typeof(SkinnedMeshRenderer), $"m_Materials.Array.data[{slot.index}]");
+                    var keyframes = curve.keys.Select((key, i) => new ObjectReferenceKeyframe {
+                        time = key.time,
+                        value = key.value == 0 ? GetDisabledMaterial() : slot.material
+                    }).ToArray();
+                    SetObjectReferenceCurve(newClip, matSwapBinding, keyframes);
+                    changed = true;
+                    addedBindings.Add(matSwapBinding);
+                }
+            }
             if (binding.type == typeof(GameObject) && binding.propertyName == "m_IsActive" && !pathsToDeleteGameObjectTogglesOn.Contains(binding.path))
             {
                 SetFloatCurve(newClip, FixAnimationBindingPath(binding, ref changed), curve);
@@ -1469,6 +1736,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                 for (int i = 0; i < propertyNames.Length; i++) {
                     fixedBinding.propertyName = propertyNames[i];
                     SetFloatCurve(newClip, fixedBinding, NaNCurve);
+                    addedBindings.Add(fixedBinding);
                 }
                 if (shaderToggleInfo.Length > 0) {
                     shaderToggleInfo = shaderToggleInfo.Substring(1);
@@ -1476,20 +1744,23 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                     fixedBinding.path = shaderToggleInfo.Substring(semicolonIndex + 1);
                     fixedBinding.propertyName = $"material._IsActiveMesh{shaderToggleInfo.Substring(0, semicolonIndex)}";
                     fixedBinding.type = typeof(SkinnedMeshRenderer);
-                    SetFloatCurve(newClip, FixAnimationBindingPath(fixedBinding, ref changed), curve);
+                    var b = FixAnimationBindingPath(fixedBinding, ref changed);
+                    SetFloatCurve(newClip, b, curve);
+                    addedBindings.Add(b);
                 }
             } else {
+                if (fixedBinding != binding)
+                    changedBindings.Add((binding, fixedBinding));
                 SetFloatCurve(newClip, fixedBinding, curve);
                 if (fixedBinding.propertyName.StartsWithSimple($"material.d4rkAvatarOptimizer") && MergeSkinnedMeshesWithNaNimation) {
                     var otherBinding = fixedBinding;
                     var match = Regex.Match(fixedBinding.propertyName, @"material\.d4rkAvatarOptimizer(.+)_ArrayIndex\d+(\.[a-z])?");
                     otherBinding.propertyName = $"material.{match.Groups[1].Value}{match.Groups[2].Value}";
                     SetFloatCurve(newClip, otherBinding, curve);
+                    addedBindings.Add(otherBinding);
                 }
             }
-            bool addPhysBoneCurves = (binding.type == typeof(SkinnedMeshRenderer) && binding.propertyName == "m_Enabled")
-                || (binding.type == typeof(GameObject) && binding.propertyName == "m_IsActive");
-            if (addPhysBoneCurves && physBonesToDisable.TryGetValue(binding.path, out var physBonePaths))
+            if (isRendererToggleBinding && physBonesToDisable.TryGetValue(binding.path, out var physBonePaths))
             {
                 var physBoneBinding = binding;
                 physBoneBinding.propertyName = "m_Enabled";
@@ -1497,7 +1768,9 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                 foreach (var physBonePath in physBonePaths)
                 {
                     physBoneBinding.path = physBonePath;
-                    SetFloatCurve(newClip, FixAnimationBindingPath(physBoneBinding, ref changed), curve);
+                    var b = FixAnimationBindingPath(physBoneBinding, ref changed);
+                    SetFloatCurve(newClip, b, curve);
+                    addedBindings.Add(b);
                     changed = true;
                 }
             }
@@ -1509,6 +1782,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             {
                 lastUnusedKeyframeTime = Mathf.Max(curve.Length > 0 ? curve[^1].time : 0, lastUnusedKeyframeTime);
                 changed = true;
+                removedBindings.Add(binding);
                 continue;
             }
             for (int i = 0; i < curve.Length; i++)
@@ -1540,6 +1814,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                 if (cache_DummyAnimationClipOfLength == null) {
                     cache_DummyAnimationClipOfLength = new Dictionary<float, AnimationClip>();
                 }
+                LogToFile($"- clip '{clip.name}' has no used keyframes but unused keyframes up to time {lastUnusedKeyframeTime}, using dummy clip");
                 if (!cache_DummyAnimationClipOfLength.TryGetValue(lastUnusedKeyframeTime, out var dummyClip)) {
                     newClip.name = $"DummyClip_{lastUnusedKeyframeTime}";
                     CreateUniqueAsset(newClip, newClip.name + ".anim");
@@ -1550,6 +1825,26 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
         }
         if (changed)
         {
+            LogToFile($"- clip '{clip.name}' got modified");
+            foreach (var (from, to) in changedBindings)
+            {
+                if (from.type == to.type)
+                {
+                    LogToFile($"  * {from.path}.{from.propertyName} => {to.path}.{to.propertyName} ({from.type})");
+                }
+                else
+                {
+                    LogToFile($"  * {from.path}.{from.propertyName} ({from.type})  =>  {to.path}.{to.propertyName} ({to.type})");
+                }
+            }
+            foreach (var binding in removedBindings)
+            {
+                LogToFile($"  - {binding.path}.{binding.propertyName} ({binding.type})");
+            }
+            foreach (var binding in addedBindings)
+            {
+                LogToFile($"  + {binding.path}.{binding.propertyName} ({binding.type})");
+            }
             CreateUniqueAsset(newClip, newClip.name + ".anim");
             return newClip;
         }
@@ -1591,7 +1886,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
     
     private void FixAllAnimationPaths()
     {
-        var avDescriptor = GetComponent<VRCAvatarDescriptor>();
+        var avDescriptor = GetAvatarDescriptor();
         if (avDescriptor == null)
             return;
         
@@ -1627,6 +1922,23 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             {
                 fxLayersToMerge.Clear();
                 fxLayerMap.Clear();
+            }
+            LogToFile($"Optimizing FX Layer with {GetFXLayerLayers().Length} original layers");
+            if (fxLayersToMerge.Count > 0)
+            {
+                LogToFile($"- Merging {fxLayersToMerge.Count} layers:", 1);
+                for (int i = 0; i < fxLayersToMerge.Count; i++)
+                {
+                    LogToFile($"- ({fxLayersToMerge[i]}) {GetFXLayerLayers()[fxLayersToMerge[i]].name}", 2);
+                }
+            }
+            if (fxLayersToDestroy.Count > 0)
+            {
+                LogToFile($"- Removing {fxLayersToDestroy.Count} layers:", 1);
+                for (int i = 0; i < fxLayersToDestroy.Count; i++)
+                {
+                    LogToFile($"- ({fxLayersToDestroy[i]}) {GetFXLayerLayers()[fxLayersToDestroy[i]].name}", 2);
+                }
             }
         }
 
@@ -1665,9 +1977,13 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
         }
 
         var fixedMotions = new Dictionary<Motion, Motion>();
-        foreach (var clip in animations)
+        LogToFile($"Fixing animation paths in {animations.Count} animation clips");
+        using (log.IndentScope())
         {
-            fixedMotions[clip] = FixAnimationClipPaths(clip);
+            foreach (var clip in animations)
+            {
+                fixedMotions[clip] = FixAnimationClipPaths(clip);
+            }
         }
         
         for (int i = 0; i < optimizedControllers.Length; i++)
@@ -1750,7 +2066,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
         var fxLayer = GetFXLayer();
         if (fxLayer == null)
             return new List<List<string>>();
-        var avDescriptor = GetComponent<VRCAvatarDescriptor>();
+        var avDescriptor = GetAvatarDescriptor();
 
         var fxLayerLayers = GetFXLayerLayers();
         var errorMessages = fxLayerLayers.Select(layer => new List<string>()).ToList();
@@ -2152,7 +2468,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
         if (fxLayer == null || !OptimizeFXLayer)
             return new HashSet<int>();
         Profiler.StartSection("FindUselessFXLayers()");
-        var avDescriptor = GetComponent<VRCAvatarDescriptor>();
+        var avDescriptor = GetAvatarDescriptor();
 
         var isAffectedByLayerWeightControl = new HashSet<int>();
 
@@ -2313,7 +2629,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
         if (cache_GetAllUsedAnimationClips != null)
             return cache_GetAllUsedAnimationClips;
         var usedClips = new HashSet<AnimationClip>();
-        var avDescriptor = GetComponent<VRCAvatarDescriptor>();
+        var avDescriptor = GetAvatarDescriptor();
         if (avDescriptor == null)
             return usedClips;
         var fxLayer = GetFXLayer();
@@ -2356,14 +2672,15 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             return cache_FindAllPhysBoneDependencies;
         var result = new Dictionary<VRCPhysBoneBase, HashSet<Object>>();
         var physBonePath = new Dictionary<string, VRCPhysBoneBase>();
-        var physBones = GetComponentsInChildren<VRCPhysBoneBase>(true);
+        var avDescriptor = GetAvatarDescriptor();
+        var physBones = avDescriptor.GetComponentsInChildren<VRCPhysBoneBase>(true);
         foreach (var physBone in physBones)
         {
             result.Add(physBone, new HashSet<Object>());
             physBonePath[GetPathToRoot(physBone)] = physBone;
         }
         var parameterSuffixes = new string[] { "_IsGrabbed", "_IsPosed", "_Angle", "_Stretch", "_Squish" };
-        foreach (var controller in GetComponent<VRCAvatarDescriptor>().baseAnimationLayers.Select(l => l.animatorController as AnimatorController).Where(c => c != null))
+        foreach (var controller in avDescriptor.baseAnimationLayers.Select(l => l.animatorController as AnimatorController).Where(c => c != null))
         {
             var parameterNames = new HashSet<string>(controller.parameters.Select(p => p.name));
             foreach (var physBone in physBones)
@@ -2395,7 +2712,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             }
             dependencies.Add(obj);
         }
-        foreach (var skinnedMesh in GetComponentsInChildren<SkinnedMeshRenderer>(true))
+        foreach (var skinnedMesh in avDescriptor.GetComponentsInChildren<SkinnedMeshRenderer>(true))
         {
             if (skinnedMesh.bones.Length == 0)
             {
@@ -2441,7 +2758,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                 Debug.LogWarning($"Skinned mesh renderer {GetPathToRoot(skinnedMesh)} has {outOfRangeBoneCount} out of range bone indices");
             }
         }
-        foreach (var behavior in GetComponentsInChildren<Behaviour>(true)
+        foreach (var behavior in avDescriptor.GetComponentsInChildren<Behaviour>(true)
             .Where(b => b != null && (b.GetType().Name.Contains("Constraint") || b.GetType().FullName.StartsWithSimple("RootMotion.FinalIK"))))
         {
             foreach (var t in FindReferencedTransforms(behavior))
@@ -2449,16 +2766,16 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                 AddDependency(t, behavior);
             }
         }
-        foreach (var skinnedRenderer in GetComponentsInChildren<SkinnedMeshRenderer>(true))
+        foreach (var skinnedRenderer in avDescriptor.GetComponentsInChildren<SkinnedMeshRenderer>(true))
         {
             AddDependency(skinnedRenderer.rootBone, skinnedRenderer);
         }
-        foreach (var renderer in GetComponentsInChildren<Renderer>(true))
+        foreach (var renderer in avDescriptor.GetComponentsInChildren<Renderer>(true))
         {
             AddDependency(renderer.probeAnchor, renderer);
             AddDependency(renderer.transform, renderer);
         }
-        foreach (var contact in GetComponentsInChildren<ContactBase>(true))
+        foreach (var contact in avDescriptor.GetComponentsInChildren<ContactBase>(true))
         {
             AddDependency(contact.GetRootTransform(), contact);
         }
@@ -2496,16 +2813,28 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
         {
             dependencies.RemoveWhere(o => o == null);
         }
-        foreach (var entry in physBoneDependencies)
+        foreach ((var physBone, var dependencies) in physBoneDependencies)
         {
-            if (entry.Key != null && entry.Value.Count(o => !(o is AnimatorController)) == 1 && entry.Value.First(o => !(o is AnimatorController)) is SkinnedMeshRenderer target)
+            if (physBone != null && dependencies.Count(o => !(o is AnimatorController)) == 1 && dependencies.First(o => !(o is AnimatorController)) is SkinnedMeshRenderer target)
             {
                 var targetPath = GetPathToRoot(target);
-                if (!result.TryGetValue(targetPath, out var physBones))
+                if (!result.TryGetValue(targetPath, out var physBonePaths))
                 {
-                    result[targetPath] = physBones = new List<string>();
+                    result[targetPath] = physBonePaths = new List<string>();
                 }
-                physBones.Add(GetPathToRoot(entry.Key));
+                physBonePaths.Add(GetPathToRoot(physBone));
+            }
+        }
+        if (result.Count > 0)
+        {
+            LogToFile($"Found {result.Count} meshes with exclusive physbone dependencies:");
+            foreach ((var meshPath, var physBonePaths) in result)
+            {
+                LogToFile($"- {physBonePaths.Count} physbones owned by '{meshPath}':", 1);
+                foreach (var physBonePath in physBonePaths)
+                {
+                    LogToFile($"- {physBonePath}", 2);
+                }
             }
         }
         return result;
@@ -2579,6 +2908,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
 
     private void OptimizeMaterialSwapMaterials()
     {
+        bool didLogInitialMessage = false;
         var exclusions = GetAllExcludedTransforms();
         foreach (var entry in slotSwapMaterials)
         {
@@ -2602,6 +2932,12 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             {
                 if (!optimizedMaterials.TryGetValue(material, out var optimizedMaterial))
                 {
+                    if (!didLogInitialMessage)
+                    {
+                        LogToFile("Optimizing material swap materials:");
+                        didLogInitialMessage = true;
+                    }
+                    using var _ = log.IndentScope();
                     DisplayProgressBar("Optimizing swap material: " + material.name);
                     var matWrapper = new List<List<(Material, List<string>)>>() { new List<(Material, List<string>)>() { (material, new List<string> { entry.Key.path } ) } };
                     var mergedMeshIndexWrapper = new List<List<int>>() { new List<int>() { meshIndex } };
@@ -2613,13 +2949,13 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
 
     public bool IsHumanoid()
     {
-        var rootAnimator = GetComponent<Animator>();
+        var rootAnimator = GetAvatarDescriptor().GetComponent<Animator>();
         return rootAnimator != null && rootAnimator.avatar != null && rootAnimator.avatar.isHuman;
     }
 
     public AnimatorController GetFXLayer()
     {
-        var avDescriptor = GetComponent<VRCAvatarDescriptor>();
+        var avDescriptor = GetAvatarDescriptor();
         var baseLayerCount = IsHumanoid() ? 5 : 3;
         if (avDescriptor == null || avDescriptor.baseAnimationLayers.Length != baseLayerCount)
             return null;
@@ -2639,7 +2975,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
     {
         usedBlendShapes.Clear();
         blendShapesToBake.Clear();
-        var avDescriptor = GetComponent<VRCAvatarDescriptor>();
+        var avDescriptor = GetAvatarDescriptor();
         if (avDescriptor != null)
         {
             if (avDescriptor.lipSync == VRC.SDKBase.VRC_AvatarDescriptor.LipSyncStyle.VisemeBlendShape
@@ -2700,7 +3036,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                 }
             }
         }
-        foreach (var skinnedMeshRenderer in GetComponentsInChildren<SkinnedMeshRenderer>(true))
+        foreach (var skinnedMeshRenderer in avDescriptor.GetComponentsInChildren<SkinnedMeshRenderer>(true))
         {
             var mesh = skinnedMeshRenderer.sharedMesh;
             if (mesh == null)
@@ -2738,7 +3074,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
 
     public List<List<(string blendshape, float value)>> FindMergeableBlendShapes(IEnumerable<Renderer> mergedMeshBlob)
     {
-        var avDescriptor = GetComponent<VRCAvatarDescriptor>();
+        var avDescriptor = GetAvatarDescriptor();
         var fxLayer = GetFXLayer();
         if (avDescriptor == null || fxLayer == null)
             return new List<List<(string blendshape, float value)>>();
@@ -3009,13 +3345,14 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
         var disabledGameObjects = new HashSet<Transform>();
         var queue = new Queue<Transform>();
         var exclusions = GetAllExcludedTransforms();
-        queue.Enqueue(transform);
+        var root = GetRootTransform();
+        queue.Enqueue(root);
         while (queue.Count > 0)
         {
             var current = queue.Dequeue();
             if (exclusions.Contains(current))
                 continue;
-            if (current != transform && !current.gameObject.activeSelf && !togglePaths.Contains(GetPathToRoot(current)))
+            if (current != root && !current.gameObject.activeSelf && !togglePaths.Contains(GetPathToRoot(current)))
             {
                 disabledGameObjects.Add(current);
                 foreach (var child in current.GetAllDescendants())
@@ -3050,18 +3387,22 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                 behaviourToggles.Add(binding.path);
             }
         }
+        var root = GetRootTransform();
 
-        var alwaysDisabledBehaviours = new HashSet<Component>(GetComponentsInChildren<Behaviour>(true)
+        var alwaysDisabledBehaviours = new HashSet<Component>(root.GetComponentsInChildren<Behaviour>(true)
             .Where(b => b != null && !b.enabled)
             .Where(b => !(b is VRCPhysBoneColliderBase))
-            .Where(b => !behaviourToggles.Contains(GetPathToRoot(b))));
+            .Where(b => !behaviourToggles.Contains(GetPathToRoot(b)))
+            .Where(b => !b.GetType().FullName.StartsWithSimple("RootMotion.FinalIK")));
 
-        alwaysDisabledBehaviours.UnionWith(GetComponentsInChildren<Renderer>(true)
+        alwaysDisabledBehaviours.UnionWith(root.GetComponentsInChildren<Renderer>(true)
             .Where(r => r != null && !r.enabled && !(r is ParticleSystemRenderer))
             .Where(r => !behaviourToggles.Contains(GetPathToRoot(r))));
 
         alwaysDisabledBehaviours.UnionWith(FindAllAlwaysDisabledGameObjects()
-            .SelectMany(t => t.GetNonNullComponents().Where(c => !(c is Transform))));
+            .SelectMany(t => t.GetNonNullComponents()
+                .Where(c => !(c is Transform)))
+                .Where(c => !c.GetType().FullName.StartsWithSimple("RootMotion.FinalIK")));
         
         var exclusions = GetAllExcludedTransforms();
 
@@ -3076,14 +3417,14 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             }
         }
 
-        var usedPhysBoneColliders = GetComponentsInChildren<VRCPhysBoneBase>(true)
+        var usedPhysBoneColliders = root.GetComponentsInChildren<VRCPhysBoneBase>(true)
             .Where(pb => !alwaysDisabledBehaviours.Contains(pb) || exclusions.Contains(pb.transform))
             .SelectMany(pb => pb.colliders);
 
-        alwaysDisabledBehaviours.UnionWith(GetComponentsInChildren<VRCPhysBoneColliderBase>(true)
+        alwaysDisabledBehaviours.UnionWith(root.GetComponentsInChildren<VRCPhysBoneColliderBase>(true)
             .Where(c => !usedPhysBoneColliders.Contains(c)));
 
-        alwaysDisabledBehaviours.RemoveWhere(c => exclusions.Contains(c.transform) || c.transform == transform);
+        alwaysDisabledBehaviours.RemoveWhere(c => exclusions.Contains(c.transform) || c.transform == root);
 
         return cache_FindAllUnusedComponents = alwaysDisabledBehaviours;
     }
@@ -3093,7 +3434,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
     {
         if (cache_FindAllMovingTransforms != null)
             return cache_FindAllMovingTransforms;
-        var avDescriptor = GetComponent<VRCAvatarDescriptor>();
+        var avDescriptor = GetAvatarDescriptor();
         if (avDescriptor == null)
             return new HashSet<Transform>();
         var transforms = new HashSet<Transform>();
@@ -3127,7 +3468,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             }
         }
 
-        var animators = GetComponentsInChildren<Animator>(true);
+        var animators = avDescriptor.GetComponentsInChildren<Animator>(true);
         foreach (var animator in animators)
         {
             if (animator == null || animator.avatar == null || !animator.avatar.isHuman)
@@ -3141,7 +3482,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
         }
 
         var alwaysDisabledComponents = FindAllUnusedComponents();
-        var physBones = GetComponentsInChildren<VRCPhysBoneBase>(true)
+        var physBones = avDescriptor.GetComponentsInChildren<VRCPhysBoneBase>(true)
             .Where(pb => !alwaysDisabledComponents.Contains(pb)).ToList();
         foreach (var physBone in physBones)
         {
@@ -3162,7 +3503,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             }
         }
 
-        var constraints = GetComponentsInChildren<Behaviour>(true)
+        var constraints = avDescriptor.GetComponentsInChildren<Behaviour>(true)
             .Where(b => b != null && !alwaysDisabledComponents.Contains(b))
             .Where(b => b.GetType().Name.Contains("Constraint")).ToList();
         foreach (var constraint in constraints)
@@ -3170,22 +3511,20 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             transforms.Add(constraint.transform);
             if (constraint.GetType().Name.StartsWithSimple("VRC"))
             {
-                using (var so = new SerializedObject(constraint))
+                using var so = new SerializedObject(constraint);
+                var targetTransformProperty = so.FindProperty("TargetTransform");
+                if (targetTransformProperty != null)
                 {
-                    var targetTransformProperty = so.FindProperty("TargetTransform");
-                    if (targetTransformProperty != null)
+                    var targetTransform = targetTransformProperty.objectReferenceValue as Transform;
+                    if (targetTransform != null)
                     {
-                        var targetTransform = targetTransformProperty.objectReferenceValue as Transform;
-                        if (targetTransform != null)
-                        {
-                            transforms.Add(targetTransform);
-                        }
+                        transforms.Add(targetTransform);
                     }
                 }
             }
         }
 
-        var finalIKScripts = GetComponentsInChildren<Behaviour>(true)
+        var finalIKScripts = avDescriptor.GetComponentsInChildren<Behaviour>(true)
             .Where(b => b != null && !alwaysDisabledComponents.Contains(b))
             .Where(b => b.GetType().FullName.StartsWithSimple("RootMotion.FinalIK")).ToList();
         foreach (var finalIKScript in finalIKScripts)
@@ -3193,22 +3532,21 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             transforms.UnionWith(FindReferencedTransforms(finalIKScript));
         }
 
-        var headChopType = Type.GetType("VRC.SDK3.Avatars.Components.VRCHeadChop, VRCSDK3A");
-        if (headChopType != null) {
-            foreach (var headChop in GetComponentsInChildren(headChopType, true)) {
-                using (var so = new SerializedObject(headChop)) {
-                    var targetBonesProperty = so.FindProperty("targetBones");
-                    for (int i = 0; i < targetBonesProperty.arraySize; i++) {
-                        var targetBone = targetBonesProperty.GetArrayElementAtIndex(i).FindPropertyRelative("transform").objectReferenceValue as Transform;
-                        if (targetBone != null) {
-                            transforms.Add(targetBone);
-                        }
-                    }
+        foreach (var headChop in avDescriptor.GetComponentsInChildren<VRCHeadChop>(true))
+        {
+            foreach (var targetBone in headChop.targetBones)
+            {
+                if (targetBone.transform != null)
+                {
+                    transforms.Add(targetBone.transform);
                 }
             }
         }
 
-        transforms.UnionWith(transform.GetAllDescendants().Where(t => t.localScale != Vector3.one));
+        transforms.UnionWith(avDescriptor.transform.GetAllDescendants().Where(t => t.localScale != Vector3.one));
+
+        transforms.UnionWith(avDescriptor.GetComponentsInChildren<Rigidbody>(true)
+            .Where(rb => !alwaysDisabledComponents.Contains(rb)).Select(rb => rb.transform));
 
         return cache_FindAllMovingTransforms = transforms;
     }
@@ -3218,11 +3556,11 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
     {
         if (cache_FindAllUnmovingTransforms != null)
             return cache_FindAllUnmovingTransforms;
-        var avDescriptor = GetComponent<VRCAvatarDescriptor>();
+        var avDescriptor = GetAvatarDescriptor();
         if (avDescriptor == null)
             return new HashSet<Transform>();
         var moving = FindAllMovingTransforms();
-        return cache_FindAllUnmovingTransforms = new HashSet<Transform>(transform.GetAllDescendants().Where(t => !moving.Contains(t)));
+        return cache_FindAllUnmovingTransforms = new HashSet<Transform>(GetRootTransform().GetAllDescendants().Where(t => !moving.Contains(t)));
     }
 
     private bool IsDPSPenetratorTipLight(Light light)
@@ -3283,7 +3621,8 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
     {
         if (cache_FindAllPenetrators != null)
             return cache_FindAllPenetrators;
-        var penetratorTipLights = GetComponentsInChildren<Light>(true)
+        var root = GetRootTransform();
+        var penetratorTipLights = root.GetComponentsInChildren<Light>(true)
             .Where(l => IsDPSPenetratorTipLight(l)).ToList();
         var penetrators = new HashSet<Renderer>();
         foreach (var light in penetratorTipLights)
@@ -3298,7 +3637,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                 penetrators.Add(candidate.GetComponentsInChildren<MeshRenderer>(true).First());
             }
         }
-        penetrators.UnionWith(GetComponentsInChildren<Renderer>(true).Where(m => IsTPSPenetratorRoot(m.transform) || IsSPSPenetratorRoot(m.transform)));
+        penetrators.UnionWith(root.GetComponentsInChildren<Renderer>(true).Where(m => IsTPSPenetratorRoot(m.transform) || IsSPSPenetratorRoot(m.transform)));
         return cache_FindAllPenetrators = penetrators;
     }
 
@@ -3306,7 +3645,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
     {
         var components = new List<T>();
         var stack = new Stack<Transform>();
-        stack.Push(transform);
+        stack.Push(GetRootTransform());
         while (stack.Count > 0)
         {
             var currentTransform = stack.Pop();
@@ -3333,7 +3672,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             alwaysDisabledGameObjects = new HashSet<Transform>();
             unusedComponents = new HashSet<Component>();
         }
-        stack.Push(transform);
+        stack.Push(GetRootTransform());
         while (stack.Count > 0)
         {
             var currentTransform = stack.Pop();
@@ -3378,6 +3717,12 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
         Profiler.EndSection();
         texArray.name = $"{texArray.width}x{texArray.height}_{texArray.format}_{(isLinear ? "linear" : "sRGB")}_{texArray.wrapMode}_{texArray.filterMode}_2DArray";
         CreateUniqueAsset(texArray, $"{texArray.name}.asset");
+        using var _ = log.IndentScope();
+        LogToFile($"- '{texArray.name}' from {textures.Count} textures:");
+        foreach (var tex in textures)
+        {
+            LogToFile($"- '{tex.name}' at path '{AssetDatabase.GetAssetPath(tex)}'", 1);
+        }
         return texArray;
     }
 
@@ -3416,7 +3761,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                 List<Texture2D> list = null;
                 foreach (var subList in textureArrayLists)
                 {
-                    if (CanCombineTextures(subList[0], texArray[0]))
+                    if (CanCombineTexturesError(subList[0], texArray[0]) == null)
                     {
                         list = subList;
                         break;
@@ -3522,7 +3867,6 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             animatedPropertyOnMeshID = null;
         var materials = new Material[sources.Count];
         var parsedShader = new ParsedShader[sources.Count];
-        var sanitizedMaterialNames = new string[sources.Count];
         var setShaderKeywords = new List<string>[sources.Count];
         var replace = new Dictionary<string, string>[sources.Count];
         var texturesToMerge = new HashSet<string>[sources.Count];
@@ -3542,12 +3886,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                 continue;
             }
             
-            char[] invalidChars = Path.GetInvalidFileNameChars()
-                .Append('\'') // imagine fxc being able to handle all legal filenames smh
-                .ToArray();
             stripShadowVariants[i] = source[0].renderQueue > 2500;
-            sanitizedMaterialNames[i] = "s_" + Path.GetFileNameWithoutExtension(parsedShader[i].filePath)
-                + " " + string.Join("_", source[0].name.Split(invalidChars, System.StringSplitOptions.RemoveEmptyEntries));
             texturesToMerge[i] = new HashSet<string>();
             propertyTextureArrayIndex[i] = new Dictionary<string, int>();
             arrayPropertyValues[i] = new Dictionary<string, (string type, List<string> values)>();
@@ -3615,14 +3954,6 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                             }
                             arrayPropertyValues[i]["arrayIndex" + prop.name].values.Add("" + index);
                             arrayPropertyValues[i]["shouldSample" + prop.name].values.Add((tex != null).ToString().ToLowerInvariant());
-                            if (!arrayPropertyValues[i].TryGetValue(prop.name + "_TexelSize", out propertyArray))
-                            {
-                                propertyArray.type = "float4";
-                                propertyArray.values = new List<string>();
-                                arrayPropertyValues[i][prop.name + "_TexelSize"] = propertyArray;
-                            }
-                            var texelSize = new Vector2(tex?.width ?? 4, tex?.height ?? 4);
-                            propertyArray.values.Add($"float4(1.0 / {texelSize.x}, 1.0 / {texelSize.y}, {texelSize.x}, {texelSize.y})");
                             break;
                     }
                 }
@@ -3728,7 +4059,6 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                     animatedPropertyValues[i],
                     setShaderKeywords[i],
                     poiUsedPropertyDefines[i],
-                    sanitizedMaterialNames[i],
                     stripShadowVariants[i],
                     animatedPropertyOnMeshID
                 );
@@ -3736,30 +4066,37 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
         });
         Profiler.EndSection();
 
+        LogToFile($"- Optimizing shaders for {sources.Count} material blobs on '{path}':");
         for (int i = 0; i < sources.Count; i++)
         {
+            using var _ = log.IndentScope();
             var source = sources[i].Select(t => t.mat).ToList();
             if (parsedShader[i] == null || !parsedShader[i].parsedCorrectly)
+            {
+                var reason = parsedShader[i] == null ? "parsedShader is null" : parsedShader[i].errorMessage;
+                LogToFile($"- Skipped optimization for material {(source[0] == null ? "null" : source[0].name)}: '{reason}'");
                 continue;
+            }
 
             DisplayProgressBar($"Optimizing shader {source[0].shader.name} ({i + 1}/{sources.Count})");
             var shaderName = optimizedShader[i].name;
-            var shaderFilePath = AssetDatabase.GenerateUniqueAssetPath(trashBinPath + shaderName + ".shader");
-            var name = Path.GetFileNameWithoutExtension(shaderFilePath);
-            optimizedShader[i].SetName(name);
-            foreach (var opt in optimizedShader[i].files)
+            var shaderFilePath = $"{trashBinPath}{shaderName}.shader";
+            if (!File.Exists(shaderFilePath))
             {
-                var filePath = shaderFilePath;
-                if (opt.name != "Shader")
+                foreach (var opt in optimizedShader[i].files)
                 {
-                    filePath = trashBinPath + opt.name;
+                    var filePath = shaderFilePath;
+                    if (opt.name != "Shader")
+                    {
+                        filePath = $"{trashBinPath}{opt.name}";
+                    }
+                    File.WriteAllLines(filePath, opt.lines);
+                    optimizedMaterialImportPaths.Add(filePath);
                 }
-                System.IO.File.WriteAllLines(filePath, opt.lines);
-                optimizedMaterialImportPaths.Add(filePath);
             }
             var optimizedMaterial = new Material(Shader.Find("Unlit/Texture"));
             optimizedMaterial.shader = null;
-            optimizedMaterial.name = "m_" + name.Substring(2);
+            optimizedMaterial.name = $"m_{source[0].name}_{shaderName[2..]}";
             materials[i] = optimizedMaterial;
             optimizedMaterials.Add((optimizedMaterial, source, optimizedShader[i]));
             var arrayList = new List<(string name, Texture2DArray array)>();
@@ -3770,6 +4107,12 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             if (arrayList.Count > 0)
             {
                 texArrayPropertiesToSet[optimizedMaterial] = arrayList;
+            }
+
+            LogToFile($"- {(source.Count > 1 ? $"{source.Count} source materials for " : "")}{optimizedMaterial.name} with shader {shaderName}");
+            for (int j = 0; j < source.Count && source.Count > 1; j++)
+            {
+                LogToFile($"- {source[j].name}", 1);
             }
         }
         return materials;
@@ -3865,7 +4208,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             {
                 if (!source.HasProperty(prop))
                     continue;
-                mat.SetInteger(prop, source.GetInt(prop));
+                mat.SetInteger(prop, source.GetInteger(prop));
             }
             var vrcFallback = source.GetTag("VRCFallback", false, "not_set");
             if (vrcFallback != "not_set")
@@ -3875,7 +4218,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             Profiler.EndSection();
         }
 
-        var skinnedMeshRenderers = GetComponentsInChildren<SkinnedMeshRenderer>(true);
+        var skinnedMeshRenderers = GetRootTransform().GetComponentsInChildren<SkinnedMeshRenderer>(true);
         foreach (var meshRenderer in skinnedMeshRenderers)
         {
             var mesh = meshRenderer.sharedMesh;
@@ -3965,59 +4308,65 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
         return importer.sRGBTexture == false;
     }
 
-    private bool CanCombineTextures(Texture a, Texture b)
+    private string CanCombineTexturesError(Texture a, Texture b)
     {
         if (a == b)
-            return true;
+            return null;
         if (a == null && b is Texture2D)
-            return true;
+            return null;
         if (a is Texture2D && b == null)
-            return true;
+            return null;
         if (!(a is Texture2D) || !(b is Texture2D))
-            return false;
+            return a is Texture2D ? $"{b.name} is not a Texture2D" : $"{a.name} is not a Texture2D";
         if (a.texelSize != b.texelSize)
-            return false;
+            return $"{a.name} and {b.name} have different texel sizes";
         var a2D = a as Texture2D;
         var b2D = b as Texture2D;
         if (a2D.format != b2D.format)
-            return false;
+            return $"{a.name} and {b.name} have different texture formats";
         if (a2D.format == TextureFormat.DXT1Crunched || a2D.format == TextureFormat.DXT5Crunched)
-            return false;
+            return $"{a.name} is using a crunched texture format which is not supported";
+        if (b2D.format == TextureFormat.DXT1Crunched || b2D.format == TextureFormat.DXT5Crunched)
+            return $"{b.name} is using a crunched texture format which is not supported";
         if (a2D.mipmapCount != b2D.mipmapCount)
-            return false;
+            return $"{a.name} and {b.name} have different mipmap counts";
         if (a2D.filterMode != b2D.filterMode)
-            return false;
+            return $"{a.name} and {b.name} have different filter modes";
         if (a2D.wrapMode != b2D.wrapMode)
-            return false;
+            return $"{a.name} and {b.name} have different wrap modes";
         if (IsTextureLinear(a2D) != IsTextureLinear(b2D))
-            return false;
-        return true;
+            return $"{a.name} and {b.name} have different color spaces";
+        return null;
     }
 
-    private bool CanCombineMaterialsWith(List<MaterialSlot> list, MaterialSlot candidate)
+    public string CanCombineMaterialsError(List<MaterialSlot> list, MaterialSlot candidate)
     {
         var candidateMat = candidate.material;
         var firstMat = list[0].material;
         if (candidateMat == null || firstMat == null)
-            return false;
+            return "One of the materials is null";
         if (firstMat.shader != candidateMat.shader)
-            return false;
+            return "Shaders do not match";
         if (list.Any(slot => slot.GetTopology() != candidate.GetTopology()))
-            return false;
+            return "Topologies do not match";
         bool IsAffectedByMaterialSwap(MaterialSlot slot) =>
             slotSwapMaterials.ContainsKey((GetPathToRoot(slot.renderer), slot.index))
             || (materialSlotRemap.TryGetValue((GetPathToRoot(slot.renderer), slot.index), out var remap) && slotSwapMaterials.ContainsKey(remap));
         if (IsAffectedByMaterialSwap(list[0]) || IsAffectedByMaterialSwap(candidate))
-            return false;
+            return "Affected by material swap";
         if (GetParticleSystemsUsingRenderer(candidate.renderer).Any(ps => ps.shape.useMeshMaterialIndex && ps.shape.meshMaterialIndex == candidate.index))
-            return false;
+            return "Affected by particle system using mesh material index";
+        if (GetParticleSystemsUsingRenderer(list[0].renderer).Any(ps => ps.shape.useMeshMaterialIndex && ps.shape.meshMaterialIndex == list[0].index))
+            return "Affected by particle system using mesh material index";
         var listMaterials = list.Select(slot => slot.material).ToArray();
         var materialComparer = new MaterialAssetComparer();
         bool allTheSameAsCandidate = listMaterials.All(mat => materialComparer.Equals(mat, candidateMat));
         if (allTheSameAsCandidate || !MergeDifferentPropertyMaterials)
-            return allTheSameAsCandidate;
+            return allTheSameAsCandidate ? null : "Not the same materials and merging different property materials is disabled";
+        if (UsesUV0ZW(candidate.renderer) || list.Any(slot => UsesUV0ZW(slot.renderer)))
+            return $"Renderer {GetPathToRoot(list.Concat(new[] { candidate }).First(slot => UsesUV0ZW(slot.renderer)).renderer)} uses uv0.zw";
         if (list.Count > 1 && listMaterials.Any(mat => mat == candidateMat))
-            return true;
+            return null;
         for (int j = 0; j < firstMat.shader.passCount; j++)
         {
             var lightModeValue = firstMat.shader.FindPassTagValue(j, new ShaderTagId("LightMode"));
@@ -4025,35 +4374,36 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             {
                 if (firstMat.GetShaderPassEnabled(lightModeValue.name) != candidateMat.GetShaderPassEnabled(lightModeValue.name))
                 {
-                    return false;
+                    return $"Shader pass enabled states for '{lightModeValue.name}' do not match";
                 }
             }
         }
         var parsedShader = ShaderAnalyzer.Parse(candidateMat.shader);
         if (parsedShader.parsedCorrectly == false)
-            return false;
+            return "Failed to parse shader correctly";
         if (firstMat.renderQueue != candidateMat.renderQueue)
-            return false;
+            return "Render queues do not match";
         if (firstMat.enableInstancing != candidateMat.enableInstancing)
-            return false;
+            return "Instancing settings do not match";
         bool hasAnyMaterialVariant = listMaterials.Any(m => m.isVariant) || candidateMat.isVariant;
         if (!hasAnyMaterialVariant && firstMat.GetTag("VRCFallback", false, "None") != candidateMat.GetTag("VRCFallback", false, "None"))
-            return false;
+            return "VRCFallback tags do not match";
         foreach (var pass in parsedShader.passes)
         {
             if (pass.vertex == null)
-                return false;
-            if (pass.hull != null)
-                return false;
-            if (pass.domain != null)
-                return false;
+                return "Vertex shader is missing";
+            if (pass.hull != null || pass.domain != null)
+                return "Tessellation is unsupported for merging with different properties";
             if (pass.fragment == null)
-                return false;
+                return "Fragment shader is missing";
         }
         foreach (var keyword in parsedShader.shaderFeatureKeyWords)
         {
-            if (firstMat.IsKeywordEnabled(keyword) ^ candidateMat.IsKeywordEnabled(keyword))
-                return false;
+            if (firstMat.IsKeywordEnabled(keyword) == candidateMat.IsKeywordEnabled(keyword))
+                continue;
+            if (parsedShader.keywordToProperty.TryGetValue(keyword, out var prop))
+                return $"Shader keyword '{keyword}' does not match\nKeyword is tied to property '{prop.name}' with display name '{prop.displayName}'";
+            return $"Shader keyword '{keyword}' does not match";
         }
         listMaterials = new HashSet<Material>(listMaterials).ToArray();
         bool mergeTextures = MergeSameDimensionTextures && parsedShader.CanMergeTextures();
@@ -4064,12 +4414,12 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                 case ParsedShader.Property.Type.Float:
                     var candidateValue = candidateMat.GetFloat(prop.name);
                     if (listMaterials[0].GetFloat(prop.name) != candidateValue)
-                        return false;
+                        return $"Float property '{prop.name}' with display name '{prop.displayName}' does not match";
                     break;
                 case ParsedShader.Property.Type.Integer:
                     var candidateIntValue = candidateMat.GetInteger(prop.name);
                     if (listMaterials[0].GetInteger(prop.name) != candidateIntValue)
-                        return false;
+                        return $"Integer property '{prop.name}' with display name '{prop.displayName}' does not match";
                     break;
                 case ParsedShader.Property.Type.Texture2D:
                 case ParsedShader.Property.Type.Texture2DArray:
@@ -4080,23 +4430,30 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                     int propertyID = Shader.PropertyToID(prop.name);
                     var cTex = candidateMat.GetTexture(propertyID);
                     if (!mergeTexture && cTex != firstMat.GetTexture(propertyID))
-                        return false;
-                    if (mergeTexture && listMaterials.Any(mat => !CanCombineTextures(cTex, mat.GetTexture(propertyID))))
-                        return false;
+                        return $"Texture property '{prop.name}' with display name '{prop.displayName}' does not match";
+                    if (mergeTexture)
+                    {
+                        var error = listMaterials.Select(mat => CanCombineTexturesError(cTex, mat.GetTexture(propertyID))).FirstOrDefault(err => err != null);
+                        if (error != null)
+                            return $"Texture property '{prop.name}' with display name '{prop.displayName}' cannot be combined: {error}";
+                    }
                     break;
             }
         }
-        return true;
+        return null;
     }
 
     private void OptimizeMaterialsOnNonSkinnedMeshes()
     {
-        var meshRenderers = GetComponentsInChildren<MeshRenderer>(true);
+        var meshRenderers = GetRootTransform().GetComponentsInChildren<MeshRenderer>(true);
         var exclusions = GetAllExcludedTransforms();
+        meshRenderers = meshRenderers.Where(mr => !exclusions.Contains(mr.transform) && mr.GetSharedMesh() != null).ToArray();
+        if (meshRenderers.Length == 0)
+            return;
+        LogToFile($"Optimizing materials on {meshRenderers.Length} MeshRenderers:");
+        using var _ = log.IndentScope();
         foreach (var meshRenderer in meshRenderers)
         {
-            if (exclusions.Contains(meshRenderer.transform) || meshRenderer.GetSharedMesh() == null)
-                continue;
             DisplayProgressBar($"Optimizing materials on {meshRenderer.name}");
             var path = GetPathToRoot(meshRenderer);
             var mats = meshRenderer.sharedMaterials.Select((material, index) => (material, index)).Where(m => m.material != null).ToList();
@@ -4135,6 +4492,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
 
     public List<List<MaterialSlot>> FindAllMergeAbleMaterials(IEnumerable<Renderer> renderers)
     {
+        using var _ = new Profiler.Section("FindAllMergeAbleMaterials()");
         var matched = new List<List<MaterialSlot>>();
         foreach (var renderer in renderers)
         {
@@ -4143,7 +4501,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                 bool foundMatch = false;
                 for (int i = 0; i < matched.Count; i++)
                 {
-                    if (CanCombineMaterialsWith(matched[i], candidate))
+                    if (CanCombineMaterialsError(matched[i], candidate) == null)
                     {
                         matched[i].Add(candidate);
                         foundMatch = true;
@@ -4164,7 +4522,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
         textureArrayLists.Clear();
         textureArrays.Clear();
 
-        var skinnedMeshRenderers = GetComponentsInChildren<SkinnedMeshRenderer>(true);
+        var skinnedMeshRenderers = GetRootTransform().GetComponentsInChildren<SkinnedMeshRenderer>(true);
         foreach (var meshRenderer in skinnedMeshRenderers)
         {
             var mesh = meshRenderer.sharedMesh;
@@ -4180,6 +4538,9 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             SearchForTextureArrayCreation(uniqueMatchedMaterials);
         }
 
+        if (textureArrayLists.Count == 0)
+            return;
+        LogToFile($"Creating {textureArrayLists.Count} texture arrays:");
         foreach (var textureList in textureArrayLists)
         {
             textureArrays.Add(CombineTextures(textureList));
@@ -4189,8 +4550,12 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
     private void CombineAndOptimizeMaterials()
     {
         var exclusions = GetAllExcludedTransforms();
-        var skinnedMeshRenderers = GetComponentsInChildren<SkinnedMeshRenderer>(true)
+        var skinnedMeshRenderers = GetRootTransform().GetComponentsInChildren<SkinnedMeshRenderer>(true)
             .Where(smr => !exclusions.Contains(smr.transform) && smr.sharedMesh != null).ToArray();
+        if (skinnedMeshRenderers.Length == 0)
+            return;
+        LogToFile($"Combining and optimizing materials on {skinnedMeshRenderers.Length} SkinnedMeshRenderers:");
+        using var _ = log.IndentScope();
         for (int meshRenderIndex = 0; meshRenderIndex < skinnedMeshRenderers.Length; meshRenderIndex++)
         {
             var meshRenderer = skinnedMeshRenderers[meshRenderIndex];
@@ -4206,6 +4571,18 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             var matchedSlots = FindAllMergeAbleMaterials(new [] { meshRenderer });
             var uniqueMatchedSlots = matchedSlots.Select(list => list.Select(slot => list.First(slot2 => slot.material == slot2.material)).Distinct().ToList()).ToList();
             var mergedMeshIndices = new List<List<int>>();
+
+            LogToFile($"- '{meshPath}' ({meshRenderer.sharedMaterials.Length} => {matchedSlots.Count})");
+            using var __ = log.IndentScope();
+            LogToFile($"- Material slot merge layout (slot id, material name):");
+            foreach (var slotGroup in matchedSlots)
+            {
+                for (int k = 0; k < slotGroup.Count; k++)
+                {
+                    var slot = slotGroup[k];
+                    LogToFile($"- {slot.index,2} {(slot.material == null ? "null" : slot.material.name)}", k == 0 ? 1 : 2);
+                }
+            }
 
             var sourceVertices = mesh.vertices;
             var hasUvSet = new bool[8] {
@@ -4280,7 +4657,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                             newIndex = targetVertices.Count;
                             indexList.Add(newIndex);
                             indexMap[oldIndex] = newIndex;
-                            targetUv[0].Add(new Vector4(sourceUv[0][oldIndex].x, sourceUv[0][oldIndex].y, sourceUv[0][oldIndex].z + internalMaterialID, 0));
+                            targetUv[0].Add(new Vector4(sourceUv[0][oldIndex].x, sourceUv[0][oldIndex].y, sourceUv[0][oldIndex].z + internalMaterialID, sourceUv[0][oldIndex].w));
                             for (int a = 1; a <= highestUsedUvSet; a++)
                             {
                                 targetUv[a]?.Add(sourceUv[a][oldIndex]);
@@ -4400,18 +4777,32 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             ).ToList()).ToList();
             var optimizedMaterials = CreateOptimizedMaterials(uniqueMatchedMaterials, meshCount > 1 ? meshCount : 0, meshPath, mergedMeshIndices);
 
+            bool swapMaterialsOnMeshDisable = (MergeSkinnedMeshesWithShaderToggle || MergeSkinnedMeshesWithNaNimation)
+                && mergedMeshIndices.SelectMany(l => l).Distinct().Count() > 1;
+
             for (int i = 0; i < uniqueMatchedMaterials.Count; i++)
             {
-                if (uniqueMatchedMaterials[i].Count != 1 || uniqueMatchedMaterials[i][0].material == null)
+                if (uniqueMatchedMaterials[i][0].material == null)
                     continue;
                 var originalSlot = GetOriginalSlot((meshPath, matchedSlots[i][0].index));
-                AddAnimationPathChange((originalSlot.path, $"m_Materials.Array.data[{originalSlot.index}]", typeof(SkinnedMeshRenderer)),
-                    (meshPath, $"m_Materials.Array.data[{i}]", typeof(SkinnedMeshRenderer)));
-                if (!optimizedSlotSwapMaterials.TryGetValue(originalSlot, out var optimizedSwapMaterials))
+                if (uniqueMatchedMaterials[i].Count == 1)
                 {
-                    optimizedSlotSwapMaterials[originalSlot] = optimizedSwapMaterials = new Dictionary<Material, Material>();
+                    AddAnimationPathChange((originalSlot.path, $"m_Materials.Array.data[{originalSlot.index}]", typeof(SkinnedMeshRenderer)),
+                        (meshPath, $"m_Materials.Array.data[{i}]", typeof(SkinnedMeshRenderer)));
+                    if (!optimizedSlotSwapMaterials.TryGetValue(originalSlot, out var optimizedSwapMaterials))
+                    {
+                        optimizedSlotSwapMaterials[originalSlot] = optimizedSwapMaterials = new Dictionary<Material, Material>();
+                    }
+                    optimizedSwapMaterials[uniqueMatchedMaterials[i][0].material] = optimizedMaterials[i];
                 }
-                optimizedSwapMaterials[uniqueMatchedMaterials[i][0].material] = optimizedMaterials[i];
+                if (swapMaterialsOnMeshDisable && !slotSwapMaterials.ContainsKey(originalSlot) && mergedMeshIndices[i].Count == 1)
+                {
+                    if (!materialSlotsToDisableWhenOriginalPathMeshIsDisabled.TryGetValue(originalSlot.path, out var slotList))
+                    {
+                        materialSlotsToDisableWhenOriginalPathMeshIsDisabled[originalSlot.path] = slotList = new List<MaterialSlot>();
+                    }
+                    slotList.Add(new MaterialSlot(meshRenderer, i));
+                }
             }
 
             meshRenderer.sharedMaterials = optimizedMaterials;
@@ -4439,7 +4830,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
     {
         var nonMovingTransforms = FindAllUnmovingTransforms();
         var result = new Dictionary<Transform, Transform>();
-        foreach (var transform in transform.GetAllDescendants())
+        foreach (var transform in GetRootTransform().GetAllDescendants())
         {
             var movingParent = transform;
             while (nonMovingTransforms.Contains(movingParent))
@@ -4466,11 +4857,11 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
     private void CombineSkinnedMeshes()
     {
         transformFromOldPath = new Dictionary<string, Transform>();
-        foreach (var t in transform.GetAllDescendants())
+        foreach (var t in GetRootTransform().GetAllDescendants())
         {
             transformFromOldPath[GetPathToRoot(t)] = t;
         }
-        var avDescriptor = GetComponent<VRCAvatarDescriptor>();
+        var avDescriptor = GetAvatarDescriptor();
         var combinableMeshList = FindPossibleSkinnedMeshMerges();
         oldPathToMergedPaths.Clear();
         oldPathToMergedPath.Clear();
@@ -4487,12 +4878,15 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             .Where(l => l[0].sharedMesh != null)
             .Where(l => l.All(m => !exclusions.Contains(m.transform)))
             .ToArray();
-        var originalRootPosition = transform.position;
-        var originalRootRotation = transform.rotation;
-        transform.position = Vector3.zero;
-        transform.rotation = Quaternion.identity;
+        if (combinableSkinnedMeshList.Length == 0)
+            return;
+        var originalRootPosition = GetRootTransform().position;
+        var originalRootRotation = GetRootTransform().rotation;
+        GetRootTransform().SetPositionAndRotation(Vector3.zero, Quaternion.identity);
         int totalMeshCount = combinableSkinnedMeshList.Sum(l => l.Count);
         int currentMeshCount = 0;
+        LogToFile($"Combining {totalMeshCount} SkinnedMeshRenderers into {combinableSkinnedMeshList.Length} combined meshes:");
+        using var _ = log.IndentScope();
         for (int combinedMeshID = 0; combinedMeshID < combinableSkinnedMeshList.Length; combinedMeshID++)
         {
             var combinableSkinnedMeshes = combinableSkinnedMeshList[combinedMeshID];
@@ -4583,7 +4977,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             // without this fix the merged mesh would disappear locally
             if (MergeSkinnedMeshesWithNaNimation && basicMergedMeshes.Count > 1)
             {
-                var animator = GetComponent<Animator>();
+                var animator = avDescriptor.GetComponent<Animator>();
                 if (animator != null && animator.isHuman)
                 {
                     var headBone = animator.GetBoneTransform(HumanBodyBones.Head);
@@ -4592,7 +4986,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                         targetRootBone = animator.GetBoneTransform(HumanBodyBones.Hips);
                         if (targetRootBone == null)
                         {
-                            targetRootBone = transform;
+                            targetRootBone = GetRootTransform();
                         }
                     }
                 }
@@ -4615,6 +5009,74 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
 
             int bindPoseMeshID = -1;
 
+            LogToFile($"- Target path '{newPath}':");
+            using var __ = log.IndentScope();
+            if (combinableSkinnedMeshes.Count > 1)
+            {
+                LogToFile($"- Merging {combinableSkinnedMeshes.Count} skinned meshes:");
+                foreach (var blob in basicMergedMeshes)
+                {
+                    for (int i = 0; i < blob.Count; i++)
+                    {
+                        LogToFile($"- {GetPathToRoot(blob[i])}", i == 0 ? 1 : 2);
+                    }
+                }
+            }
+            LogToFile($"- Basic mesh info:");
+            using (log.IndentScope())
+            {
+                LogToFile($"- Total vertices: {totalVertexCount}");
+                LogToFile($"- Total submeshes: {basicMergedMeshesList.Sum(m => m.sharedMesh.subMeshCount)}");
+                LogToFile($"- Target root bone: '{GetPathToRoot(targetRootBone)}'");
+                var usedAttributes = new Dictionary<string, int>();
+                var sourceRootBones = new HashSet<string>();
+                var sourceLightAnchors = new HashSet<string>();
+                var sourcesWithExtraMaterialSlots = new HashSet<string>();
+                foreach (var skinnedMesh in basicMergedMeshesList)
+                {
+                    var path = GetPathToRoot(skinnedMesh);
+                    sourceRootBones.Add(skinnedMesh.rootBone == null ? path : GetPathToRoot(skinnedMesh.rootBone));
+                    sourceLightAnchors.Add(skinnedMesh.probeAnchor == null ? path : GetPathToRoot(skinnedMesh.probeAnchor));
+                    var mesh = skinnedMesh.sharedMesh;
+                    for (int i = 0; i < mesh.vertexAttributeCount; i++)
+                    {
+                        var a = mesh.GetVertexAttribute(i);
+                        var s = $"- {a.attribute,-12}  {a.dimension}x{a.format,-8}";
+                        if (!usedAttributes.TryGetValue(s, out int count))
+                            count = 0;
+                        usedAttributes[s] = count + 1;
+                    }
+                    if (skinnedMesh.sharedMaterials.Length > mesh.subMeshCount)
+                    {
+                        sourcesWithExtraMaterialSlots.Add(path);
+                    }
+                }
+                LogToFile($"- Source vertex attributes:");
+                foreach ((var attr, var count) in usedAttributes.OrderBy(s => s.Key))
+                {
+                    LogToFile($"{attr} {count,3}", 1);
+                }
+                void LogList(HashSet<string> list, string title)
+                {
+                    if (list.Count == 1)
+                    {
+                        LogToFile($"- {title}: '{list.First()}'");
+                    }
+                    else
+                    {
+                        LogToFile($"- {title} ({list.Count}):");
+                        foreach (var s in list)
+                        {
+                            LogToFile($"- {s}", 1);
+                        }
+                    }
+                }
+                LogList(sourceRootBones, "Source root bone");
+                LogList(sourceLightAnchors, "Source light anchor");
+                if (sourcesWithExtraMaterialSlots.Count > 0)
+                    LogList(sourcesWithExtraMaterialSlots, "Extra material slot mesh");
+            }
+
             foreach (SkinnedMeshRenderer skinnedMesh in basicMergedMeshesList)
             {
                 DisplayProgressBar($"Combining mesh ({++currentMeshCount}/{totalMeshCount}) {skinnedMesh.name}");
@@ -4626,7 +5088,6 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                 var bindPoseIDMap = new Dictionary<int, int>();
                 var indexOffset = targetVertices.Count;
                 var sourceVertices = mesh.vertices;
-                var sourceUv = mesh.uv;
                 var sourceNormals = mesh.normals;
                 var sourceTangents = mesh.tangents;
                 var sourceWeights = mesh.boneWeights;
@@ -4641,7 +5102,8 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                 var bindPoseCount = sourceBindPoses.Length;
                 if (sourceBones.Length != bindPoseCount)
                 {
-                    Debug.LogWarning($"Bone count ({sourceBones.Length}) does not match bind pose count ({bindPoseCount}) on {skinnedMesh.name}");
+                    Debug.LogWarning($"Bone count ({sourceBones.Length}) does not match bind pose count ({bindPoseCount}) on {currentMeshPath}");
+                    LogToFile($"- Warning: Bone count ({sourceBones.Length}) does not match bind pose count ({bindPoseCount}) on {currentMeshPath}");
                     bindPoseCount = Math.Min(sourceBones.Length, bindPoseCount);
                 }
                 var aabb = skinnedMesh.localBounds;
@@ -4662,7 +5124,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                 {
                     NaNimationBone = new GameObject("NaNimationBone").transform;
                     var pathToRoot = currentMeshPath.Replace('/', '_');
-                    var siblingNames = new HashSet<string>(transform.Cast<Transform>().Select(t => t.name));
+                    var siblingNames = new HashSet<string>(GetRootTransform().Cast<Transform>().Select(t => t.name));
                     var nameCandidate = "NaNimation " + pathToRoot;
                     int i = 1;
                     while (siblingNames.Contains(nameCandidate))
@@ -4670,9 +5132,8 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                         nameCandidate = "NaNimation " + pathToRoot + " " + i++;
                     }
                     NaNimationBone.name = nameCandidate;
-                    NaNimationBone.parent = transform;
-                    NaNimationBone.localPosition = Vector3.zero;
-                    NaNimationBone.localRotation = Quaternion.identity;
+                    NaNimationBone.parent = GetRootTransform();
+                    NaNimationBone.SetLocalPositionAndRotation(Vector3.zero, Quaternion.identity);
                     NaNimationBone.localScale = Vector3.one;
                     NaNimationBoneIndex = AddNewBone(NaNimationBone, NaNimationBone.worldToLocalMatrix);
                     string key = "NaNimation";
@@ -4728,6 +5189,13 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                     targetUv[i].AddRange(uvs.Count == sourceVertices.Length ? uvs : Enumerable.Repeat(Vector4.zero, sourceVertices.Length));
                 }
 
+                var sourceUv = new List<Vector4>();
+                mesh.GetUVs(0, sourceUv);
+                if (sourceUv.Count != sourceVertices.Length)
+                {
+                    sourceUv = Enumerable.Repeat(Vector4.zero, sourceVertices.Length).ToList();
+                }
+
                 if (mesh.HasVertexAttribute(VertexAttribute.Color))
                 {
                     if (useColor32)
@@ -4751,7 +5219,6 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                     }
                 }
 
-                sourceUv = sourceUv.Length != sourceVertices.Length ? new Vector2[sourceVertices.Length] : sourceUv;
                 sourceNormals = sourceNormals.Length != sourceVertices.Length ? new Vector3[sourceVertices.Length] : sourceNormals;
                 sourceTangents = sourceTangents.Length != sourceVertices.Length ? new Vector4[sourceVertices.Length] : sourceTangents;
 
@@ -4760,6 +5227,10 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                     blendShapeIDs = new List<int>();
                 }
 
+                if (blendShapeIDs.Count > 0)
+                {
+                    LogToFile($"- Baking {blendShapeIDs.Count} blendshapes from '{currentMeshPath}':");
+                }
                 foreach (int blendShapeID in blendShapeIDs)
                 {
                     var weight = Mathf.Clamp(skinnedMesh.GetBlendShapeWeight(blendShapeID) / 100f, 0, 1);
@@ -4773,6 +5244,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                         sourceNormals[i] += deltaNormals[i] * weight;
                         sourceTangents[i] += (Vector4)(deltaTangents[i] * weight);
                     }
+                    LogToFile($"- {mesh.GetBlendShapeName(blendShapeID)} ({weight * 100f:F1}%)", 1);
                 }
 
                 for (int vertIndex = 0; vertIndex < sourceVertices.Length; vertIndex++)
@@ -4820,7 +5292,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                     targetVertices.Add(sourceVertices[vertIndex]);
                     targetNormals.Add(sourceNormals[vertIndex]);
                     targetTangents.Add(sourceTangents[vertIndex]);
-                    targetUv[0].Add(new Vector4(sourceUv[vertIndex].x, sourceUv[vertIndex].y, blobMeshID << 12, 0));
+                    targetUv[0].Add(new Vector4(sourceUv[vertIndex].x, sourceUv[vertIndex].y, sourceUv[vertIndex].z + (blobMeshID << 12), sourceUv[vertIndex].w));
                 }
 
                 for (var matID = 0; matID < skinnedMesh.sharedMaterials.Length; matID++)
@@ -4841,9 +5313,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             var blendShapeWeights = new Dictionary<string, float>();
 
             var combinedMesh = new Mesh();
-            combinedMesh.indexFormat = targetVertices.Count >= 65536
-                ? UnityEngine.Rendering.IndexFormat.UInt32
-                : UnityEngine.Rendering.IndexFormat.UInt16;
+            combinedMesh.indexFormat = targetVertices.Count >= 65536 ? IndexFormat.UInt32 : IndexFormat.UInt16;
             combinedMesh.SetVertices(targetVertices);
             combinedMesh.bindposes = targetBindPoses.ToArray();
             combinedMesh.SetBoneWeights(targetWeights.ToArray());
@@ -4947,13 +5417,16 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                     var targetDeltaVertices = new Vector3[combinedMeshVertexCount];
                     var targetDeltaNormals = new Vector3[combinedMeshVertexCount];
                     var targetDeltaTangents = new Vector3[combinedMeshVertexCount];
+                    LogToFile($"- Merging {mergedBlendShapes.Count} blendshapes into {name}");
                     bool first = true;
                     foreach (var toMerge in mergedBlendShapes)
                     {
-                        var path = toMerge.blendshape.Substring(0, toMerge.blendshape.IndexOf("/blendShape."));
+                        var path = toMerge.blendshape[..toMerge.blendshape.IndexOf("/blendShape.")];
+                        var blendShapeName = toMerge.blendshape[(path.Length + 12)..];
+                        LogToFile($"- {path}.{blendShapeName} with weight {toMerge.weight * 100:F2}%", 1);
                         var skinnedMesh = GetTransformFromPath(path).GetComponent<SkinnedMeshRenderer>();
                         var mesh = skinnedMesh.sharedMesh;
-                        var blendShapeID = mesh.GetBlendShapeIndex(toMerge.blendshape.Substring(path.Length + 12));
+                        var blendShapeID = mesh.GetBlendShapeIndex(blendShapeName);
                         if (blendShapeID == -1)
                             continue;
                         var meshID = meshPathToID[path];
@@ -5164,8 +5637,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             AssetDatabase.SaveAssets();
             Profiler.EndSection();
         }
-        transform.position = originalRootPosition;
-        transform.rotation = originalRootRotation;
+        GetRootTransform().SetPositionAndRotation(originalRootPosition, originalRootRotation);
 
         // flush particle system cache since we merged meshes
         cache_ParticleSystemsUsingRenderer = null;
@@ -5176,19 +5648,31 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
         if (cache_GetAllExcludedTransforms != null)
             return cache_GetAllExcludedTransforms;
         var allExcludedTransforms = new HashSet<Transform>();
-        var hardCodedExclusions = new List<string>() {
+        var automaticExclusions = new List<string>() {
             "_VirtualLens_Root",
         }.Select(s => GetTransformFromPath(s)).ToList();
-        hardCodedExclusions.AddRange(transform.GetComponentsInChildren<VRCContactSender>(true)
+        automaticExclusions.AddRange(GetRootTransform().GetComponentsInChildren<VRCContactSender>(true)
             .Where(c => c.collisionTags.Any(t => t == "superneko.realkiss.contact.mouth"))
             .Select(c => c.transform.parent)
             .Where(t => t != null)
             .Select(t => t.Cast<Transform>().FirstOrDefault(child => child.TryGetComponent(out SkinnedMeshRenderer _)))
             .Where(t => t != null));
-        hardCodedExclusions.AddRange(FindAllPenetrators().Select(p => p.transform));
-        foreach (var excludedTransform in ExcludeTransforms.Concat(hardCodedExclusions)) {
-            if (excludedTransform == null)
-                continue;
+        automaticExclusions.AddRange(FindAllPenetrators().Select(p => p.transform));
+        automaticExclusions = automaticExclusions.Where(t => t != null).ToList();
+        if (automaticExclusions.Count > 0) {
+            LogToFile($"Automatically excluding {automaticExclusions.Count} transforms from optimization:");
+            foreach (var t in automaticExclusions) {
+                LogToFile($"- {GetPathToRoot(t)}", 1);
+            }
+        }
+        var manualExclusions = ExcludeTransforms.Where(t => t != null).ToList();
+        if (manualExclusions.Count > 0) {
+            LogToFile($"Excluding {manualExclusions.Count} user-specified transforms from optimization:");
+            foreach (var t in manualExclusions) {
+                LogToFile($"- {GetPathToRoot(t)}", 1);
+            }
+        }
+        foreach (var excludedTransform in manualExclusions.Concat(automaticExclusions)) {
             allExcludedTransforms.Add(excludedTransform);
             allExcludedTransforms.UnionWith(excludedTransform.GetAllDescendants());
         }
@@ -5235,12 +5719,14 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
     private void DestroyEditorOnlyGameObjects()
     {
         var stack = new Stack<Transform>();
-        stack.Push(transform);
+        stack.Push(GetRootTransform());
+        var deletedPaths = new List<string>();
         while (stack.Count > 0)
         {
             var current = stack.Pop();
             if (current.gameObject.CompareTag("EditorOnly"))
             {
+                deletedPaths.Add(GetPathToRoot(current));
                 DestroyImmediate(current.gameObject);
                 continue;
             }
@@ -5249,25 +5735,34 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                 stack.Push(child);
             }
         }
+        if (deletedPaths.Count > 0)
+        {
+            LogToFile($"Deleted {deletedPaths.Count} EditorOnly GameObjects:");
+            foreach (var path in deletedPaths)
+            {
+                LogToFile($"- {path}", 1);
+            }
+        }
     }
 
     private void DestroyUnusedComponents()
     {
         if (!DeleteUnusedComponents)
             return;
-        var list = FindAllUnusedComponents();
-        foreach (var component in list)
+        var list = FindAllUnusedComponents().Where(c => c != null).ToList();
+        if (list.Count == 0)
+            return;
+        var typesToDeleteInSecondPass = new HashSet<Type>() {
+            typeof(Rigidbody),
+            typeof(AudioSource),
+        };
+        LogToFile($"Deleting {list.Count} unused components:");
+        foreach (var component in list.Where(c => c != null && !typesToDeleteInSecondPass.Contains(c.GetType()))
+                            .Concat(list.Where(c => c != null && typesToDeleteInSecondPass.Contains(c.GetType()))))
         {
             if (component == null)
                 continue;
-            if (component is AudioSource audio)
-            {
-                var vrcAudioSource = audio.GetComponent<VRCSpatialAudioSource>();
-                if (vrcAudioSource != null)
-                {
-                    DestroyImmediate(vrcAudioSource);
-                }
-            }
+            LogToFile($"- {component.GetType().Name} on {GetPathToRoot(component.transform)}", 1);
             DestroyImmediate(component);
         }
     }
@@ -5283,31 +5778,32 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
         used.UnionWith(movingTransforms);
         used.UnionWith(movingTransforms.Select(t => t != null ? t.parent : null));
 
-        used.Add(transform);
-        used.UnionWith(GetComponentsInChildren<Animator>(true)
+        var root = GetRootTransform();
+        used.Add(root);
+        used.UnionWith(root.GetComponentsInChildren<Animator>(true)
             .Select(a => a.transform.Find("Armature")).Where(t => t != null));
-        used.UnionWith(transform.Cast<Transform>().Where(t => t.name.StartsWithSimple("NaNimation ")));
+        used.UnionWith(root.Cast<Transform>().Where(t => t.name.StartsWithSimple("NaNimation ")));
 
-        foreach (var contact in GetComponentsInChildren<ContactBase>(true))
+        foreach (var contact in root.GetComponentsInChildren<ContactBase>(true))
         {
             used.Add(contact.GetRootTransform());
             used.Add(contact.GetRootTransform().parent);
         }
 
-        foreach (var physBone in GetComponentsInChildren<VRCPhysBoneBase>(true))
+        foreach (var physBone in root.GetComponentsInChildren<VRCPhysBoneBase>(true))
         {
             used.Add(physBone.GetRootTransform());
             used.Add(physBone.GetRootTransform().parent);
             used.UnionWith(physBone.ignoreTransforms);
         }
 
-        foreach (var collider in GetComponentsInChildren<VRCPhysBoneColliderBase>(true))
+        foreach (var collider in root.GetComponentsInChildren<VRCPhysBoneColliderBase>(true))
         {
             used.Add(collider.GetRootTransform());
             used.Add(collider.GetRootTransform().parent);
         }
 
-        foreach (var c in GetComponentsInChildren<Component>(true).Where(c => c != null && !(c is Transform)))
+        foreach (var c in root.GetComponentsInChildren<Component>(true).Where(c => c != null && !(c is Transform)))
         {
             used.Add(c.transform);
             if (c.GetType().Name.Contains("Constraint"))
@@ -5318,7 +5814,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
         }
 
         // the vrc finger colliders depend on their relative position to their parent, so we need to keep their parents around too
-        var avDescriptor = GetComponent<VRCAvatarDescriptor>();
+        var avDescriptor = GetAvatarDescriptor();
         var fingerColliders = new List<VRCAvatarDescriptor.ColliderConfig>() {
             avDescriptor.collider_fingerIndexL,
             avDescriptor.collider_fingerIndexR,
@@ -5346,7 +5842,9 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
         }
 
         var queue = new Queue<Transform>();
-        queue.Enqueue(transform);
+        queue.Enqueue(root);
+
+        var deletedPaths = new List<string>();
 
         while (queue.Count > 0)
         {
@@ -5357,6 +5855,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             }
             if (!used.Contains(current))
             {
+                deletedPaths.Add(GetPathToRoot(current));
                 foreach (var child in current.Cast<Transform>().ToArray())
                 {
                     child.parent = current.parent;
@@ -5365,13 +5864,22 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                 DestroyImmediate(current.gameObject);
             }
         }
+
+        if (deletedPaths.Count > 0)
+        {
+            LogToFile($"Deleted {deletedPaths.Count} unused GameObjects:");
+            foreach (var path in deletedPaths)
+            {
+                LogToFile($"- {path}", 1);
+            }
+        }
     }
 
     private void MoveRingFingerColliderToFeet()
     {
         if (!UseRingFingerAsFootCollider)
             return;
-        var avDescriptor = GetComponent<VRCAvatarDescriptor>();
+        var avDescriptor = GetAvatarDescriptor();
 
         var collider = avDescriptor.collider_footL;
         collider.state = VRCAvatarDescriptor.ColliderConfig.State.Custom;
@@ -5388,6 +5896,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
         leaf.transform.localScale = Vector3.one;
         collider.transform = leaf.transform;
         avDescriptor.collider_fingerRingL = collider;
+        LogToFile($"Moved left ring finger collider to '{GetPathToRoot(collider.transform)}'");
 
         collider = avDescriptor.collider_footR;
         collider.state = VRCAvatarDescriptor.ColliderConfig.State.Custom;
@@ -5404,6 +5913,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
         leaf.transform.localScale = Vector3.one;
         collider.transform = leaf.transform;
         avDescriptor.collider_fingerRingR = collider;
+        LogToFile($"Moved right ring finger collider to '{GetPathToRoot(collider.transform)}'");
 
         // disable collider foldout in the inspector because it resets the collider transform
         EditorPrefs.SetBool("VRCSDK3_AvatarDescriptorEditor3_CollidersFoldout", false);
@@ -5413,16 +5923,17 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
     {
         if (!MergeStaticMeshesAsSkinned)
             return;
-        var staticMeshes = gameObject.GetComponentsInChildren<MeshFilter>(true)
+        var staticMeshes = GetRootTransform().GetComponentsInChildren<MeshFilter>(true)
             .Where(f => f.sharedMesh != null && f.gameObject.GetComponent<MeshRenderer>() != null)
             .Where(f => f.gameObject.layer != 12)
             .Select(f => f.gameObject).Distinct().ToList();
         var meshesThatGetCombinedWithOtherMeshes = new HashSet<Renderer>(FindPossibleSkinnedMeshMerges().Where(l => l.Count > 1).SelectMany(l => l));
+        var meshesToConvert = staticMeshes.Where(obj => meshesThatGetCombinedWithOtherMeshes.Contains(obj.GetComponent<Renderer>())).ToList();
+        if (meshesToConvert.Count > 0)
+            LogToFile($"Converting {meshesToConvert.Count} static meshes to skinned meshes for merging:");
 
-        foreach (var obj in staticMeshes)
+        foreach (var obj in meshesToConvert)
         {
-            if (!meshesThatGetCombinedWithOtherMeshes.Contains(obj.GetComponent<Renderer>()))
-                continue;
             bool isActive = obj.GetComponent<MeshRenderer>().enabled;
             var mats = obj.GetComponent<MeshRenderer>().sharedMaterials;
             var lightAnchor = obj.GetComponent<MeshRenderer>().probeAnchor;
@@ -5434,10 +5945,13 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             skinnedMeshRenderer.sharedMaterials = mats;
             skinnedMeshRenderer.probeAnchor = lightAnchor;
             convertedMeshRendererPaths.Add(GetPathToRoot(obj));
+            LogToFile($"- {GetPathToRoot(obj)}", 1);
         }
     }
 
     public class MaterialAssetComparer : IEqualityComparer<Material> {
+        private static Dictionary<(Material a, Material b), bool> comparisonCache = new ();
+        public static void ClearCache() => comparisonCache.Clear();
         public bool Equals(Material a, Material b) {
             if (a == b)
                 return true;
@@ -5445,6 +5959,10 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                 return false;
             if (a.shader != b.shader)
                 return false;
+            if (comparisonCache.TryGetValue((a, b), out bool cachedResult))
+                return cachedResult;
+            
+            try {
             if (a.renderQueue != b.renderQueue)
                 return false;
             if (a.doubleSidedGI != b.doubleSidedGI)
@@ -5506,8 +6024,11 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                 return false;
             if (!aMatrices.Select(x => a.GetMatrix(x)).SequenceEqual(bMatrices.Select(x => b.GetMatrix(x))))
                 return false;
+            } finally {
+                comparisonCache[(a, b)] = comparisonCache[(b, a)] = false;
+            }
 
-            return true;
+            return comparisonCache[(a, b)] = comparisonCache[(b, a)] = true;
         }
 
         public int GetHashCode(Material m) {
@@ -5527,7 +6048,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
 
     private void DeduplicateMaterials()
     {
-        var allRenderers = GetComponentsInChildren<Renderer>(true);
+        var allRenderers = GetRootTransform().GetComponentsInChildren<Renderer>(true);
         var exclusions = GetAllExcludedTransforms();
         allRenderers = allRenderers.Where(r => !exclusions.Contains(r.transform)).ToArray();
 
