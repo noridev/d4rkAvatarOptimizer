@@ -163,7 +163,7 @@ public class d4rkAvatarOptimizerEditor : Editor
             }
         }
 
-        Profiler.enabled = optimizer.ProfileTimeUsed;
+        Profiler.enabled = AvatarOptimizerSettings.ProfileTimeUsedInUI;
         Profiler.Reset();
 
         Profiler.StartSection("Validate");
@@ -186,8 +186,12 @@ public class d4rkAvatarOptimizerEditor : Editor
             return;
         }
 
-        EditorGUILayout.Separator();
         GUI.enabled = true;
+        if (optimizer.GetAvatarDescriptor() == null)
+        {
+            return;
+        }
+        EditorGUILayout.Separator();
 
         if (longestTimeUsed > AvatarOptimizerSettings.AutoRefreshPreviewTimeout)
         {
@@ -252,9 +256,11 @@ public class d4rkAvatarOptimizerEditor : Editor
                 optimizedTotalMaterialCount += 1;
             }
         }
-        PerfRankChangeLabel("Skinned Mesh Renderers", skinnedMeshes.Count, optimizedSkinnedMeshCount, PerformanceCategory.SkinnedMeshCount);
-        PerfRankChangeLabel("Mesh Renderers", meshRenderers.Count, optimizedMeshCount, PerformanceCategory.MeshCount);
-        PerfRankChangeLabel("Material Slots", totalMaterialCount, optimizedTotalMaterialCount, PerformanceCategory.MaterialCount);
+        var perfRankChanges = new List<(string label, int oldValue, int newValue, PerformanceCategory category)> {
+            ("Skinned Mesh Renderers", skinnedMeshes.Count, optimizedSkinnedMeshCount, PerformanceCategory.SkinnedMeshCount),
+            ("Mesh Renderers", meshRenderers.Count, optimizedMeshCount, PerformanceCategory.MeshCount),
+            ("Material Slots", totalMaterialCount, optimizedTotalMaterialCount, PerformanceCategory.MaterialCount),
+        };
         if (optimizer.GetFXLayer() != null)
         {
             var nonErrors = new HashSet<string>() {"toggle", "motion time", "blend tree", "multi toggle"};
@@ -263,9 +269,10 @@ public class d4rkAvatarOptimizerEditor : Editor
             var optimizedLayerCount = mergedLayerCount > 1 ? layerCount - mergedLayerCount + 1 : layerCount;
             if (optimizer.OptimizeFXLayer)
                 optimizedLayerCount -= optimizer.FindUselessFXLayers().Count;
-            PerfRankChangeLabel("FX Layers", layerCount, optimizedLayerCount, PerformanceCategory.FXLayerCount);
+            perfRankChanges.Add(("FX Layers", layerCount, optimizedLayerCount, PerformanceCategory.FXLayerCount));
         }
-        PerfRankChangeLabel("Blend Shapes", totalBlendShapePaths.Count, KeptBlendShapePaths.Count, PerformanceCategory.BlendShapeCount);
+        perfRankChanges.Add(("Blend Shapes", totalBlendShapePaths.Count, KeptBlendShapePaths.Count, PerformanceCategory.BlendShapeCount));
+        PerfRankChangeLabel(perfRankChanges);
         Profiler.EndSection();
 
         EditorGUILayout.Separator();
@@ -348,8 +355,7 @@ public class d4rkAvatarOptimizerEditor : Editor
 
         if (Foldout("Debug Info", ref optimizer.ShowDebugInfo, showNonDestructiveToolingWarning: true))
         {
-            ToggleOptimizerProperty(nameof(optimizer.ProfileTimeUsed));
-            EditorGUI.indentLevel++;
+            using var indent = new EditorGUI.IndentLevelScope();
             if (Foldout("Unparsable Materials", ref optimizer.DebugShowUnparsableMaterials))
             {
                 Profiler.StartSection("Unparsable Materials");
@@ -420,16 +426,28 @@ public class d4rkAvatarOptimizerEditor : Editor
                 DrawDebugList(CantMergeNaNimationBecauseOfWDONAnimations);
                 Profiler.EndSection();
             }
-            if (optimizer.WritePropertiesAsStaticValues && Foldout("Locked in Materials", ref optimizer.DebugShowLockedInMaterials))
+            if (optimizer.WritePropertiesAsStaticValues)
             {
-                Profiler.StartSection("Locked in Materials");
-                var list = optimizer.GetUsedComponentsInChildren<Renderer>()
-                    .SelectMany(r => r.sharedMaterials).Distinct()
-                    .Where(mat => IsLockedIn(mat)).ToArray();
-                DrawDebugList(list);
-                Profiler.EndSection();
+                if (Foldout("Locked in Materials", ref optimizer.DebugShowLockedInMaterials))
+                {
+                    Profiler.StartSection("Locked in Materials");
+                    var list = optimizer.GetUsedComponentsInChildren<Renderer>()
+                        .SelectMany(r => r.sharedMaterials).Distinct()
+                        .Where(mat => IsLockedIn(mat) && !HasPropertyMarkedAsRenameAnimated(mat)).ToArray();
+                    DrawDebugList(list);
+                    Profiler.EndSection();
+                }
+                if (Foldout("Unlocked Materials with Rename Animated", ref optimizer.DebugShowUnlockedMaterialsWithRenameAnimated))
+                {
+                    Profiler.StartSection("Unlocked Materials with Rename Animated");
+                    var list = optimizer.GetUsedComponentsInChildren<Renderer>()
+                        .SelectMany(r => r.sharedMaterials).Distinct()
+                        .Where(mat => CanLockIn(mat) && !IsLockedIn(mat) && HasPropertyMarkedAsRenameAnimated(mat)).ToArray();
+                    DrawDebugList(list);
+                    Profiler.EndSection();
+                }
             }
-            if (!optimizer.WritePropertiesAsStaticValues && Foldout("Unlocked Materials", ref optimizer.DebugShowUnlockedMaterials))
+            else if (Foldout("Unlocked Materials", ref optimizer.DebugShowUnlockedMaterials))
             {
                 Profiler.StartSection("Unlocked Materials");
                 var list = optimizer.GetUsedComponentsInChildren<Renderer>()
@@ -584,9 +602,8 @@ public class d4rkAvatarOptimizerEditor : Editor
                 DrawDebugList(UnmovingBones);
                 Profiler.EndSection();
             }
-            EditorGUI.indentLevel--;
         }
-        if (optimizer.ProfileTimeUsed)
+        if (AvatarOptimizerSettings.ProfileTimeUsedInUI)
         {
             EditorGUILayout.Separator();
             var timeUsed = Profiler.FormatTimeUsed().Take(6).ToArray();
@@ -692,40 +709,10 @@ public class d4rkAvatarOptimizerEditor : Editor
                 "You can try to delete the broken copy and try again with different settings or adding parts to the exclusion list.\n" +
                 "Click this message to find or create a bug report on github.", MessageType.Error);
             if (Event.current.type == EventType.MouseDown && GUILayoutUtility.GetLastRect().Contains(Event.current.mousePosition))
-                Application.OpenURL("https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues");
+                Application.OpenURL("https://github.com/noridev/d4rkAvatarOptimizer/issues");
         }
 
         var exclusions = optimizer.GetAllExcludedTransforms();
-
-        var animatorsExcludingRoot = avDescriptor.GetComponentsInChildren<Animator>(true)
-            .Where(a => a.gameObject != avDescriptor.gameObject)
-            .Where(a => !exclusions.Contains(a.transform))
-            .Where(a => a.runtimeAnimatorController != null)
-            .ToArray();
-
-        if (animatorsExcludingRoot.Length > 0)
-        {
-            EditorGUILayout.HelpBox(
-                "Some animators exist that are not on the root object.\n" +
-                "The optimizer only supports animators in the custom playable layers in the avatar descriptor.\n" +
-                "If the optimized copy is broken, try to add the animators to the exclusion list.", MessageType.Warning);
-            if (GUILayout.Button("Auto add extra animators to exclusion list"))
-            {
-                foreach (var animator in animatorsExcludingRoot)
-                {
-                    optimizer.ExcludeTransforms.Add(animator.transform);
-                }
-                optimizer.ShowExcludedTransforms = true;
-                ClearUICaches();
-            }
-        }
-
-        if (optimizer.DeleteUnusedGameObjects && optimizer.UsesAnyLayerMasks())
-        {
-            EditorGUILayout.HelpBox(
-                "Animator layer masks are not supported when deleting unused game objects.\n" +
-                "If the optimized copy is broken, try to disable the option.", MessageType.Warning);
-        }
 
         if ((optimizer.MergeSkinnedMeshesWithNaNimation || optimizer.MergeSkinnedMeshesWithShaderToggle)
             && optimizer.GetPolyCount() > d4rkAvatarOptimizer.MaxPolyCountForAutoShaderToggle)
@@ -743,7 +730,16 @@ public class d4rkAvatarOptimizerEditor : Editor
 
             var correctlyParsedMaterials = allMaterials
                 .Select(m => ShaderAnalyzer.Parse(m?.shader))
-                .Where(p => (p?.parsedCorrectly ?? false)).ToArray();
+                .Where(p => p?.parsedCorrectly ?? false).ToArray();
+
+            if (allMaterials.Any(m => !IsLockedIn(m) && HasPropertyMarkedAsRenameAnimated(m)))
+            {
+                EditorGUILayout.HelpBox(
+                    "Some materials have properties marked as Rename Animated without being locked in.\n" +
+                    "Write Properties as Static Values does not support this option.\n" +
+                    "If you rely on Rename Animated, lock in these materials with their native method.\n" +
+                    "Check the Debug Info foldout for a list of these materials.", MessageType.Warning);
+            }
 
             var mergeInfoList = new List<string>();
 
@@ -770,12 +766,11 @@ public class d4rkAvatarOptimizerEditor : Editor
                     "Check the Debug Info foldout for more info.", MessageType.Info);
             }
 
-            if (optimizer.MergeDifferentPropertyMaterials && allMaterials.Any(m => IsLockedIn(m)))
+            if (optimizer.MergeDifferentPropertyMaterials && allMaterials.Any(m => IsLockedIn(m) && !HasPropertyMarkedAsRenameAnimated(m)))
             {
                 EditorGUILayout.HelpBox(
                     "Some materials are locked in.\n" +
                     "Write Properties as Static Values will do effectively the same as locking in while also having more potential to reduce material count.\n" +
-                    "If you use \"Rename Animated\" on some locked in shaders keep them locked as the animations will break otherwise.\n" + 
                     "Check the Debug Info foldout for a full list.", MessageType.Info);
             }
 
@@ -863,7 +858,7 @@ public class d4rkAvatarOptimizerEditor : Editor
             return;
         using var _ = new EditorGUILayout.HorizontalScope();
         GUILayout.Space(15 * EditorGUI.indentLevel);
-        if (GUILayout.Button(new GUIContent("Material Merge Analyzer", "Open the \"Why No Material Merge\" window to analyze why some materials can't be merged.")))
+        if (GUILayout.Button(new GUIContent("Open Material Merge Analyzer", "Open the \"Why No Material Merge\" window to analyze why some materials can't be merged.")))
         {
             EditorWindow.GetWindow<WhyNoMaterialMerge>().Show();
         }
@@ -904,10 +899,11 @@ public class d4rkAvatarOptimizerEditor : Editor
     private HashSet<string> keptBlendShapePathsCache = null;
     private List<List<(string blendshape, float value)>> mergeableBlendShapesCache = null;
     private Dictionary<Mesh, (int count, float maxValue, float medianValue)[]> meshBoneWeightStatsCache = null;
+    private Dictionary<Material, bool> hasPropertiesMarkedAsRenameAnimatedCache = null;
 
-    private void ClearUICaches()
+    private void ClearUICaches(bool force = false)
     {
-        if (longestTimeUsed > AvatarOptimizerSettings.AutoRefreshPreviewTimeout)
+        if (!force && longestTimeUsed > AvatarOptimizerSettings.AutoRefreshPreviewTimeout)
             return;
         mergedMaterialPreviewCache = null;
         unmovingBonesCache = null;
@@ -918,6 +914,7 @@ public class d4rkAvatarOptimizerEditor : Editor
         animatedMaterialPropertyPathsCache = null;
         keptBlendShapePathsCache = null;
         mergeableBlendShapesCache = null;
+        hasPropertiesMarkedAsRenameAnimatedCache = null;
         optimizer.ClearCaches();
     }
 
@@ -1202,6 +1199,83 @@ public class d4rkAvatarOptimizerEditor : Editor
         return false;
     }
 
+    public bool HasPropertyMarkedAsRenameAnimated(Material material)
+    {
+        if (material == null)
+            return false;
+        hasPropertiesMarkedAsRenameAnimatedCache ??= new();
+        if (!CanLockIn(material))
+            return false;
+        if (hasPropertiesMarkedAsRenameAnimatedCache.TryGetValue(material, out var cached))
+            return cached;
+
+        string CleanStringForPropertyNames(string s)
+        {
+            s = s.Trim().Replace(" ", "");
+            var utf8Source = System.Text.Encoding.UTF8.GetBytes(s);
+            string cleaned = "";
+            for (var i = 0; i < utf8Source.Length; i++)
+            {
+                if ((utf8Source[i] >= 'a' && utf8Source[i] <= 'z') ||
+                    (utf8Source[i] >= 'A' && utf8Source[i] <= 'Z') ||
+                    (utf8Source[i] >= '0' && utf8Source[i] <= '9') || utf8Source[i] == '_')
+                {
+                    cleaned += (char)utf8Source[i];
+                }
+                else
+                {
+                    cleaned += utf8Source[i].ToString("X2");
+                }
+            }
+            return cleaned;
+        }
+        var raSuffix = CleanStringForPropertyNames(material.GetTag("thry_rename_suffix", false, material.name));
+
+        bool EntryHasRenameAnimatedTag(SerializedProperty entry)
+        {
+            if (entry == null)
+                return false;
+            var keyProp = entry.FindPropertyRelative("first");
+            var valueProp = entry.FindPropertyRelative("second");
+            if (keyProp == null || valueProp == null
+                || keyProp.propertyType != SerializedPropertyType.String
+                || valueProp.propertyType != SerializedPropertyType.String)
+            {
+                return false;
+            }
+            var tag = keyProp.stringValue;
+            if (string.IsNullOrEmpty(tag))
+                return false;
+            if (!tag.EndsWith("Animated", System.StringComparison.Ordinal))
+                return false;
+            if (valueProp.stringValue != "2")
+                return false;
+            var propName = tag[..^"Animated".Length];
+            return material.HasProperty(propName) || material.HasProperty($"{propName}_{raSuffix}");
+        }
+
+        bool result = false;
+        using (var serializedMaterial = new SerializedObject(material))
+        {
+            var tagMap = serializedMaterial.FindProperty("stringTagMap");
+
+            if (tagMap != null && tagMap.isArray)
+            {
+                for (int i = 0; i < tagMap.arraySize; i++)
+                {
+                    if (EntryHasRenameAnimatedTag(tagMap.GetArrayElementAtIndex(i)))
+                    {
+                        result = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        hasPropertiesMarkedAsRenameAnimatedCache[material] = result;
+        return result;
+    }
+
     private static Dictionary<string, List<string>> tooltipCache = null;
     private Dictionary<string, List<string>> TooltipCache
     {
@@ -1293,6 +1367,11 @@ public class d4rkAvatarOptimizerEditor : Editor
         var content = GetLabelWithTooltip(label);
         bool output = EditorGUILayout.Foldout(value, content, true);
         var rect = GUILayoutUtility.GetLastRect();
+        if (Event.current.type == EventType.MouseDown && Event.current.button == 1 && rect.Contains(Event.current.mousePosition))
+        {
+            ClearUICaches(force: true);
+            Event.current.Use();
+        }
         rect.x += rect.width;
         rect.width = 20;
         if (!string.IsNullOrEmpty(content.tooltip))
@@ -1506,37 +1585,42 @@ public class d4rkAvatarOptimizerEditor : Editor
         { PerformanceCategory.BlendShapeCount, new int[] {24, 32, 48, 64, int.MaxValue} },
     };
 
-    private void PerfRankChangeLabel(string label, int oldValue, int newValue, PerformanceCategory category)
+    private void PerfRankChangeLabel(List<(string label, int oldValue, int newValue, PerformanceCategory category)> changes)
     {
-        var oldRating = PerformanceRating.VeryPoor;
-        var newRating = PerformanceRating.VeryPoor;
-        var perfLevels = d4rkAvatarOptimizer.HasCustomShaderSupport ? _perfLevelsWindows : _perfLevelsAndroid;
-        if (perfLevels.ContainsKey(category))
+        float oldValueWidth = changes.Max(c => c.oldValue.ToString().Length) * 7 + 7;
+        float newValueWidth = changes.Max(c => c.newValue.ToString().Length) * 7 + 7;
+        for (int i = 0; i < changes.Count; i++)
         {
-            oldRating = GetPerfRank(oldValue, perfLevels[category]);
-            newRating = GetPerfRank(newValue, perfLevels[category]);
-        }
-
-        using (new EditorGUILayout.HorizontalScope())
-        {
-            EditorGUILayout.LabelField(GetPerformanceIconForRating(oldRating), GUILayout.Width(20));
-            EditorGUILayout.LabelField($"{oldValue}", GUILayout.Width(25));
-            EditorGUILayout.LabelField($"->", GUILayout.Width(20));
-            EditorGUILayout.LabelField(GetPerformanceIconForRating(newRating), GUILayout.Width(20));
-            EditorGUILayout.LabelField($"{newValue}", GUILayout.Width(25));
-            EditorGUILayout.LabelField(label);
-        }
-
-        // Hacky way to only show the warning icon for the first perf rank change label
-        if (label == "Skinned Mesh Renderers")
-        {
-            var warning = GetNonDestructiveToolingWarning("Performance Rank Change Preview");
-            if (!string.IsNullOrEmpty(warning))
+            var (label, oldValue, newValue, category) = changes[i];
+            var oldRating = PerformanceRating.VeryPoor;
+            var newRating = PerformanceRating.VeryPoor;
+            var perfLevels = d4rkAvatarOptimizer.HasCustomShaderSupport ? _perfLevelsWindows : _perfLevelsAndroid;
+            if (perfLevels.ContainsKey(category))
             {
-                var rect = GUILayoutUtility.GetLastRect();
-                rect.x += rect.width - 20;
-                rect.width = 20;
-                DrawWarningIconWithTooltip(warning, rect);
+                oldRating = GetPerfRank(oldValue, perfLevels[category]);
+                newRating = GetPerfRank(newValue, perfLevels[category]);
+            }
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                EditorGUILayout.LabelField(GetPerformanceIconForRating(oldRating), GUILayout.Width(20));
+                EditorGUILayout.LabelField($"{oldValue}", GUILayout.Width(oldValueWidth));
+                EditorGUILayout.LabelField($"->", GUILayout.Width(20));
+                EditorGUILayout.LabelField(GetPerformanceIconForRating(newRating), GUILayout.Width(20));
+                EditorGUILayout.LabelField($"{newValue}", GUILayout.Width(newValueWidth));
+                EditorGUILayout.LabelField(label);
+            }
+
+            if (i == 0)
+            {
+                var warning = GetNonDestructiveToolingWarning("Performance Rank Change Preview");
+                if (!string.IsNullOrEmpty(warning))
+                {
+                    var rect = GUILayoutUtility.GetLastRect();
+                    rect.x += rect.width - 20;
+                    rect.width = 20;
+                    DrawWarningIconWithTooltip(warning, rect);
+                }
             }
         }
     }

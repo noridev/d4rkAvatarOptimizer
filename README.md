@@ -67,9 +67,10 @@ Shaders can do a lot of *weird* things, therefore the optimizer is bound to fail
 
 If you are a shader author you can read the [Guidelines for Shader Authors](./Documentation~/ForShaderAuthors.md) document to make your shaders compatible with the optimizer.
 
-It is also nice to make a bug report with the broken shaders so I can fix it for the future.  
-To do that you need to bundle up the optimized `.mat`, `.shader` & `.cginc` files. You can do that by right clicking on `d4rkAvatarOptimizer/TrashBin` in the project view under `Packages` and selecting `Show in Explorer`. A window with the folder selected should open. Go inside the folder and put the files into a `.zip` file. You don't need to include the `.asset` files as they can be very large and don't help when debugging the shaders.  
-Once you have done that make a bug report on the [issue tracker](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues) where you can attach the `.zip` file.
+### Make a Bug Report 
+To make a bug report you need to find the generated assets in the trash bin folder. You can get them by clicking the settings button on the optimizer component and then clicking the button with the open folder icon.  
+Now your explorer should open with the trash bin folder open and a `_TrashBin.zip` file selected. This file contains the generated animation controllers, materials, shaders and the log file of the optimization.  
+Now you can make a bug report on the [issue tracker](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues) by describing your issue and attaching the `_TrashBin.zip` file.
 
 ![Show TrashBin in Explorer](./Documentation~/img/openTrashBinInExplorer.png)
 
@@ -80,7 +81,8 @@ There are also some settings to tweak the optimization. You can read about their
 ## Apply on Upload
 Automatically applies the optimizer to the avatar before uploading it to VRChat. This is non destructive, the avatar in your scene will stay as it is.
 ## Write Properties as Static Values
-This is very similar to what some shaders call locking in or baking. If you use this option you should disable the locking in or baking feature of your shader.
+This is very similar to what some shaders call locking in or baking. If you use this option you should disable the locking in or baking feature of your shader.  
+One exception to this is for materials that use the "Rename Animated" feature. These materials should stay locked in.
 
 When enabled the optimizer will replace the uniform parameter definitions with a static value on all materials.  
 For example `uniform float4 _Color;` will get changed to `static float4 _Color = float4(1, 0, 1, 1);`  
@@ -122,7 +124,7 @@ This is useful to not look weird with blocked animations in case of NaNimation t
 Automatically converts static meshes to skinned meshes so that they can be merged with other meshes and have their materials merged as well. This only happens if the static mesh has materials that can be merged with materials from the skinned mesh it tries to get merged into.  
 Does not convert meshes on the UIMenu layer since they are mostly used for computation.
 ## Merge Different Property Materials
-Merges materials with the same shader where properties can have different values. If they do have different values the values will get written to a constant buffer. Material IDs get written to uv.w and used to access the correct value from that cbuffer.
+Merges materials with the same shader where properties can have different values. If they do have different values the values will get written to a constant buffer. Material IDs get written to uv.z and used to access the correct value from that cbuffer.
 
 If your shader has a "lock in" or "bake" feature, make sure to not use it with this optimizer if you have "Write Properties as Static Values" enabled. Locked in shaders will have different actual shaders for each material, so they can't be combined. "Write Properties as Static Values" will take over the job of locking in the shaders.
 
@@ -152,6 +154,8 @@ Deletes all layers in the FX Layer that are considered useless:
   * Has no states or sub state machines.
   * Has 0 weight and is not affected by any layer weight control and has no state behaviours.
   * Has no state behaviours and only animates bindings that don't exist.
+
+Deletes children in direct blend trees that don't animate any existing bindings.
 
 Tries to merge layers that are only doing toggles into a direct blend tree.
 You can read about this technique [here](https://notes.sleightly.dev/dbt-combining/).
@@ -189,8 +193,6 @@ When enabled the optimizer will keep the blend shapes that are used by MMD anima
 Deletes all game objects that have no used components and are not referenced in any other used components. This also applies to bones referenced in skinned meshes as long as the bones aren't moved by animations, eye look settings or phys bone components. It re-parents the children of the deleted game objects to their respective parents as well as transfers its weight to the parent.
 ## Use Ring Finger as Foot Collider
 Moves the ring finger collider to match the foot contact. This enables you to touch other players phys bones with your feet.
-## Profile Time Used
-Outputs how much time the different sections in the code took to execute.
 ## Exclusions
 You can exclude certain parts of the model from all optimizations. Any Transform in this list will stop the optimizer from touching anything on that object or anything below it. The number in the parenthesis indicates how many transforms are excluded even if the foldout is closed.
 ## Create Optimized Copy
@@ -247,8 +249,12 @@ Shows all textures that are used as normal maps but don't use the BC5 compressio
 Shows all meshes that can't be merged with NaNimation toggles because they are missing either the on or off animation in a layer.  
 This usually happens when using a WD ON workflow. In that case switching to a WD OFF workflow is recommended as it allows for more optimizations.
 ### Locked in Materials
-Shows all materials that have a "lock in" or "bake" feature enabled which the optimizer detected. If you want to merge these materials you need to disable the "lock in" or "bake" feature.  
+Shows all materials that have a "lock in" or "bake" feature enabled which the optimizer detected. Materials which have a property marked as "Rename Animated" will not show up in this list as they should stay locked in to work correctly.
+
+If you want to merge these materials you need to disable the "lock in" or "bake" feature.  
 The optimizer might not detect all forms of "lock in" or "bake" so you might need to check some materials manually.
+### Unlocked Materials with Rename Animated
+Shows all materials that have a "lock in" or "bake" feature disabled which the optimizer detected and also have at least one property marked as "Rename Animated". The optimizer doesn't support rename animated as a feature so make sure to lock in these materials or animations relying on rename animated properties won't work.
 ### Unlocked Materials
 Shows all materials that have a "lock in" or "bake" feature disabled which the optimizer detected.  
 With the `Write Properties as Static Values` option disabled you need to make sure to lock in or bake your materials in this list before optimization.

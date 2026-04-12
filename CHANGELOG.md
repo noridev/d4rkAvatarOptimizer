@@ -1,6 +1,102 @@
+## v4.3.0
+### Features
+* `Delete Unused GameObjects` now supports animator layer masks.
+* `Optimize FX Layer` now also deletes unused motions from blend trees in all layers.
+  * This is useful for avatars that come with pre optimized DBTs where you delete some of the gimmicks but don't want to manually touch the blend tree in the animator.
+
+### Changes
+* Animators that are not on the root no longer show a validation warning.  
+  Instead they automatically add all things they animate to the exclusions on build.
+* Automatic exclusions are now grouped by their source in the log file.
+* Better selection of root bone and probe anchor when merging meshes with different ones.
+  * Highest priority is for the bone set by the most meshes
+  * Tie breaker is in order of humanoid bone > child of humanoid bone > any other bone
+* Minor optimizer performance improvements on avatars with a lot of animator layers.
+
+### Bug Fixes
+* Fix crash when having `Delete Unused Components` disabled.
+
+## v4.2.0
+### Features
+* Add support for `VRCRaycast` components.
+
+### Changes
+* Right click on a foldout label in the optimizer UI now forces a cache refresh for the previews.
+
+### Bug Fixes
+* Fix error spam when adding the optimizer to a non avatar related game object.
+* Fix numbers in performance rank change preview getting cut off when they have more than 3 digits.
+* Fix some parts of the optimizer only checking for animations in the fxlayer and not the others.
+
+## v4.1.3
+### Changes
+* Add special handling for `.orlshader` files to make them support texture array merging.
+
+## v4.1.2
+### Changes
+* ShaderParser no longer spams warnings for missing include files in the console.
+* Custom texture declaration macro detection now ignores unity macros like `UNITY_DECLARE_TEX2D`.
+  * Shaders wanting to support both BiRP and URP might redeclare them and we can be confident that they will only declare a tex2d like in BiRP.
+
+### Bug Fixes
+* Fix `#pragma` getting pulled out of `#if` structures.
+  * This caused Poi 10.x shaders to compile way too many variants.
+
+## v4.1.1
+### Bug Fixes
+* Fix crash when non fx layers where not sub assets of some other asset. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues/180)
+
+## v4.1.0
+### Changes
+* Remove `Profile Time Used` from the optimizer settings as the log file now always contains the profiling time.
+* Add global setting `Profile Time Used in UI` to show the profiling time for the editor UI at the bottom of the inspector. 
+* Add more granular logging of performance of different parts of the optimizer to the log file.
+* Rename `Material Merge Analyzer` button to `Open Material Merge Analyzer`.
+* Package json now correctly has the author field filled out as "d4rkpl4y3r".
+* Add vrc sdk version to the log file.
+* Add 4 buttons to settings panel:
+  * Reset global settings to default values.
+  * Open the log file of the last optimization.
+  * Open the Trash Bin folder where the generated assets are stored.
+  * Open GitHub Repository.
+
+## v4.0.5
+### Changes
+* Generated shader code is now indented with 4 spaces per `{` and `}`.
+
+### Bug Fixes
+* Remove `UNITY_BRANCH` from if statements that have all their variables replaced by constants. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues/178)
+
+## v4.0.4
+### Changes
+* Show a validation warning when unlocked materials with rename animated properties are detected and `Write Properties as Static Values` is enabled.
+
+### Bug Fixes
+* Fix issue when merging meshes with different uv sets.
+
+## v4.0.3
+### Changes
+* Why No Material Merge window got some minor changes:
+  * The avatar auto selection toggle is now a toggle button and the object fields for the avatar descriptor and the optimizer are now inline.
+  * Increased the font size of the help boxes slightly to make them more readable.
+* Log file changes:
+  * File renamed from `_log.txt` to `_d4rkAvatarOptimizer.log`
+  * Log all paths where a component == null
+  * Log all paths where a game object has a slash in its name
+  * Log all ambiguous paths where multiple game objects have the same path in the hierarchy
+* Simplified state machine behavior cloning to rely on `EditorUtility.CopySerialized` to work with newer versions of the vrc sdk where new properties got added.
+
+### Bug Fixes
+* Fix optimizer not working correctly when game objects have slashes in their names.
+
+## v4.0.2
+### Bug Fixes
+* Fix crash when the avatar has a missing script on it.
+
 ## v4.0.1
 ### Changes
 * Preset buttons and slot selection buttons in `Why No Material Merge` window are now toggle buttons to better highlight the current selection.
+* Optimizer build hook now logs information about skipping or running optimization on avatars.
 
 ### Bug Fixes
 * Fix `Use Shader Toggles` not working properly in editor when using glcore graphics API. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues/174)

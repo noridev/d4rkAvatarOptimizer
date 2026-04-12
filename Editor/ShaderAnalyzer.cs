@@ -124,6 +124,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
         public HashSet<string> unableToParseIfexStatements = new();
         public List<string> unknownOptimizerComments = new();
         public HashSet<string> requiredConstantProperties = new();
+        public List<string> parserWarnings = new();
 
         public bool CanMerge()
         {
@@ -226,6 +227,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
         private bool doneParsing;
         private string[] shaderFileLines;
         private HashSet<string> alreadyIncludedThisPass;
+        private bool replaceCoreTextureMacros = false;
 
         private ShaderAnalyzer(string shaderName, string shaderPath)
         {
@@ -240,13 +242,14 @@ namespace d4rkpl4y3r.AvatarOptimizer
                 Profiler.StartSection("ORL.ShaderGenerator");
                 try
                 {
-                    shaderFileLines = ORL.ShaderGenerator.ShaderDefinitionImporter.GenerateShader(shaderPath, stripSamplingMacros: true)
+                    shaderFileLines = ORL.ShaderGenerator.ShaderDefinitionImporter.GenerateShader(shaderPath)
                         .Split(new string[] { "\r\n", "\r", "\n" }, System.StringSplitOptions.RemoveEmptyEntries);
                 }
                 catch (IOException e)
                 {
                     parsedShader.errorMessage = e.Message;
                 }
+                replaceCoreTextureMacros = true;
                 Profiler.EndSection();
                 #else
                 parsedShader.errorMessage = "ORLShader Generator 7.1+ is not installed.";
@@ -376,6 +379,22 @@ namespace d4rkpl4y3r.AvatarOptimizer
             return conditions;
         }
 
+        private static string FormatWarningPath(string path)
+        {
+            if (string.IsNullOrEmpty(path))
+                return path;
+            int assetsIndex = path.IndexOf("Assets", System.StringComparison.OrdinalIgnoreCase);
+            int packagesIndex = path.IndexOf("Packages", System.StringComparison.OrdinalIgnoreCase);
+            int startIndex = -1;
+            if (assetsIndex >= 0 && packagesIndex >= 0)
+                startIndex = System.Math.Min(assetsIndex, packagesIndex);
+            else if (assetsIndex >= 0)
+                startIndex = assetsIndex;
+            else if (packagesIndex >= 0)
+                startIndex = packagesIndex;
+            return startIndex >= 0 ? path[startIndex..] : path;
+        }
+
         private bool RecursiveParseFile(string currentFileName, bool isTopLevelFile, string callerPath)
         {
             var processedLines = new List<string>();
@@ -470,7 +489,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
                         throw new ParserException("This is a unity build in shader. It is not a normal asset and can't be read.");
                     }
                     if (fileName != "UnityLightingCommon.cginc")
-                        Debug.LogWarning("Could not find include file: " + currentFilePath);
+                        parsedShader.parserWarnings.Add($"Could not find include file: '{FormatWarningPath(currentFilePath)}'");
                     return false;
                 }
                 catch (DirectoryNotFoundException)
@@ -483,8 +502,8 @@ namespace d4rkpl4y3r.AvatarOptimizer
                     }
                     // happens for example if audio link is not in the project but the shader has a reference to the include file
                     // returning false here will cause the #include directive to be kept in the shader instead of getting inlined
-                    Debug.LogWarning("Could not find directory for include file: " + currentFilePath);
-                    return false; 
+                    parsedShader.parserWarnings.Add($"Could not find directory for include file: '{FormatWarningPath(currentFilePath)}'");
+                    return false;
                 }
             }
             var trimWhiteSpaceChars = new char[] { ' ', '\t', '\r', '\n' };
@@ -917,23 +936,27 @@ namespace d4rkpl4y3r.AvatarOptimizer
             return (name, returnType);
         }
 
-        private static HashSet<string> FunctionParameterModifiers = new()
-        {
+        private static HashSet<string> FunctionParameterModifiers = new() {
             "in", "out", "inout",
             "point", "line", "triangle",
             "precise", "const", "uniform",
-            "centroid", "linear", "sample", "noperspective", "nointerpolation" };
+            "centroid", "linear", "sample", "noperspective", "nointerpolation"
+        };
+
+        public static void SkipWhitespace(string str, ref int index)
+        {
+            while (index < str.Length && char.IsWhiteSpace(str[index]))
+                index++;
+        }
 
         public static ParsedShader.Function.Parameter ParseNextFunctionParameter(string line, ref int index)
         {
-            while (index < line.Length && char.IsWhiteSpace(line[index]))
-                index++;
+            SkipWhitespace(line, ref index);
             if (index == line.Length)
                 return null;
             if (line[index] == ',') {
                 index++;
-                while (index < line.Length && char.IsWhiteSpace(line[index]))
-                    index++;
+                SkipWhitespace(line, ref index);
             }
             var potentialType = ParseTypeAndTrailingWhitespace(line, ref index);
             if (potentialType == null)
@@ -968,16 +991,14 @@ namespace d4rkpl4y3r.AvatarOptimizer
                 if (!int.TryParse(line.Substring(index, endIndex - index).Trim(), out param.arraySize))
                     return null;
                 index = endIndex + 1;
-                while (index < line.Length && char.IsWhiteSpace(line[index]))
-                    index++;
+                SkipWhitespace(line, ref index);
             }
             param.semantic = null;
             if (index == line.Length)
                 return param;
             if (line[index] == ':') {
                 index++;
-                while (index < line.Length && char.IsWhiteSpace(line[index]))
-                    index++;
+                SkipWhitespace(line, ref index);
                 param.semantic = ParseIdentifierAndTrailingWhitespace(line, ref index);
             }
             if (index == line.Length || line[index] != '=')
@@ -1172,10 +1193,33 @@ namespace d4rkpl4y3r.AvatarOptimizer
             }
         }
 
+        private HashSet<string> unityTextureDeclarationMacros = new() {
+            "UNITY_DECLARE_TEX2D",
+            "UNITY_DECLARE_TEX2D_NOSAMPLER",
+            "UNITY_DECLARE_TEX2D_NOSAMPLER_INT",
+            "UNITY_DECLARE_TEX2D_NOSAMPLER_UINT",
+            "UNITY_DECLARE_TEX2D_HALF",
+            "UNITY_DECLARE_TEX2D_FLOAT",
+            "UNITY_DECLARE_TEX2D_NOSAMPLER_HALF",
+            "UNITY_DECLARE_TEX2D_NOSAMPLER_FLOAT",
+            "UNITY_DECLARE_TEX2DARRAY_MS",
+            "UNITY_DECLARE_TEX2DARRAY_MS_NOSAMPLER",
+            "UNITY_DECLARE_TEX2DARRAY",
+            "UNITY_DECLARE_TEX2DARRAY_NOSAMPLER",
+            "UNITY_DECLARE_FRAMEBUFFER_INPUT_FLOAT_MS",
+            "UNITY_DECLARE_FRAMEBUFFER_INPUT_HALF_MS",
+            "UNITY_DECLARE_FRAMEBUFFER_INPUT_INT_MS",
+            "UNITY_DECLARE_FRAMEBUFFER_INPUT_UINT_MS",
+            "UNITY_DECLARE_DEPTH_TEXTURE_MS",
+            "UNITY_DECLARE_DEPTH_TEXTURE",
+            "UNITY_DECLARE_SCREENSPACE_SHADOWMAP",
+            "UNITY_DECLARE_SCREENSPACE_TEXTURE",
+            "TEXTURE2D", "TEXTURE2D_PARAM",
+        };
+
         private void ParseFunctionDeclarationsRecursive(List<string> lines, ParsedShader.Pass currentPass, int startIndex, HashSet<string> alreadyParsed = null)
         {
-            if (alreadyParsed == null)
-                alreadyParsed = new HashSet<string>();
+            alreadyParsed ??= new HashSet<string>();
             for (int lineIndex = startIndex; lineIndex < lines.Count; lineIndex++) {
                 var currentLine = lines[lineIndex];
                 if (currentLine[0] == '#') {
@@ -1188,7 +1232,10 @@ namespace d4rkpl4y3r.AvatarOptimizer
                     }
                     else if (currentLine.StartsWithSimple("#define ")) {
                         if (currentLine.Contains("Texture2D ") || currentLine.Contains("sampler2D ") || currentLine.Contains("##_ST")) {
-                            if (!parsedShader.customTextureDeclarations.Contains(currentLine))
+                            int defineIndex = "#define ".Length;
+                            SkipWhitespace(currentLine, ref defineIndex);
+                            var identifier = ParseIdentifierAndTrailingWhitespace(currentLine, ref defineIndex);
+                            if (!parsedShader.customTextureDeclarations.Contains(currentLine) && !unityTextureDeclarationMacros.Contains(identifier))
                                 parsedShader.customTextureDeclarations.Add(currentLine);
                         }
                     }
@@ -1256,6 +1303,30 @@ namespace d4rkpl4y3r.AvatarOptimizer
             }
         }
 
+        Regex tex2DDeclaration = new(@"(?:^|(?<!\w))TEXTURE2D(?:_FLOAT|_HALF)?\s*\(([\w\s]+)\)");
+        Regex tex2DParam = new(@"(?:^|(?<!\w))TEXTURE2D_PARAM\s*\(([\w\s]+),([\w\s]+)\)");
+        Regex samplerDeclaration = new(@"(?:^|(?<!\w))SAMPLER\s*\(([\w\s]+)\)");
+
+        private void ReplaceCoreTextureMacros(List<string> lines)
+        {
+            for (int i = 0; i < lines.Count; i++)
+            {
+                string line = lines[i];
+                if (line.StartsWithSimple("#"))
+                    continue;
+                if (line.Contains("TEXTURE2D"))
+                {
+                    line = tex2DDeclaration.Replace(line, "Texture2D $1");
+                    line = tex2DParam.Replace(line, "Texture2D $1, SamplerState $2");
+                }
+                if (line.Contains("SAMPLER"))
+                {
+                    line = samplerDeclaration.Replace(line, "SamplerState $1");
+                }
+                lines[i] = line;
+            }
+        }
+
         private void SemanticParseShader()
         {
             ParsedShader.Pass currentPass = null;
@@ -1264,6 +1335,13 @@ namespace d4rkpl4y3r.AvatarOptimizer
             List<string> hlslInclude = new();
             List<string> lines = parsedShader.text[".shader"];
             List<string> tags = new();
+            if (replaceCoreTextureMacros)
+            {
+                foreach (var fileLines in parsedShader.text.Values)
+                {
+                    ReplaceCoreTextureMacros(fileLines);
+                }
+            }
             parsedShader.text[".shader"] = output;
             parsedShader.mismatchedCurlyBraces = false;
             int curlyBraceDepth = 0;
@@ -1734,20 +1812,42 @@ namespace d4rkpl4y3r.AvatarOptimizer
             var sb = new StringBuilder();
             bool inIdentifier = ShaderAnalyzer.IsIdentifierLetter(line[0]);
             bool didReplaceSomething = false;
+            bool isIfStatementWithBranchAttribute = line.StartsWithSimple("UNITY_BRANCH");
             int currentChunkStart = 0;
+            int identifierId = 0;
             for (int i = 1; i <= line.Length; i++)
             {
                 if (i == line.Length || ShaderAnalyzer.IsIdentifierLetter(line[i]) != inIdentifier)
                 {
-                    var chunk = line.Substring(currentChunkStart, i - currentChunkStart);
-                    if (inIdentifier && constantPropertyValues.TryGetValue(chunk, out var replacement))
+                    var chunk = line[currentChunkStart..i];
+                    if (inIdentifier)
                     {
-                        if (variableTypesThisPass.TryGetValue(chunk, out var type))
+                        bool isNumber = char.IsDigit(chunk[0]);
+                        if (!isNumber && isIfStatementWithBranchAttribute && identifierId == 1 && chunk != "if")
                         {
-                            replacement = $"({type}){replacement}";
+                            isIfStatementWithBranchAttribute = false;
                         }
-                        sb.Append($"({replacement})");
-                        didReplaceSomething = true;
+                        if (constantPropertyValues.TryGetValue(chunk, out var replacement))
+                        {
+                            if (variableTypesThisPass.TryGetValue(chunk, out var type))
+                            {
+                                replacement = $"({type}){replacement}";
+                            }
+                            sb.Append($"({replacement})");
+                            didReplaceSomething = true;
+                        }
+                        else
+                        {
+                            sb.Append(chunk);
+                            if (identifierId > 1 && !isNumber)
+                            {
+                                isIfStatementWithBranchAttribute = false;
+                            }
+                        }
+                        if (!isNumber)
+                        {
+                            identifierId++;
+                        }
                     }
                     else
                     {
@@ -1757,7 +1857,8 @@ namespace d4rkpl4y3r.AvatarOptimizer
                     inIdentifier = !inIdentifier;
                 }
             }
-            return didReplaceSomething ? sb.ToString() : line;
+            var result = didReplaceSomething ? sb.ToString() : line;
+            return isIfStatementWithBranchAttribute ? result["UNITY_BRANCH".Length..].TrimStart() + " // removed UNITY_BRANCH" : result;
         }
 
         private void InjectArrayPropertyInitialization()
@@ -2664,7 +2765,8 @@ namespace d4rkpl4y3r.AvatarOptimizer
                 output.Add($"{textureType} {newTexName};");
                 output.Add($"SamplerState sampler{newTexName};");
 
-                output.Add($"class {texName}_Wrapper {{");
+                output.Add($"class {texName}_Wrapper");
+                output.Add("{");
                 output.Add($"float memberToDifferentiateWrapperClasses[{++textureWrapperCount}];");
 
                 output.Add($"{type} Sample(SamplerState sampl, float2 uv) {{");
@@ -3106,26 +3208,26 @@ namespace d4rkpl4y3r.AvatarOptimizer
                 switch (identifier) {
                     case "vertex":
                         if ((currentPass.geometry != null && mergedMeshCount > 1) || arrayPropertyValues.Count > 0 || animatedPropertyValues.Count > 0) {
-                            pragmaOutput.Add("#pragma vertex d4rkAvatarOptimizer_vertexWithWrapper");
+                            output.Add("#pragma vertex d4rkAvatarOptimizer_vertexWithWrapper");
                         } else {
-                            pragmaOutput.Add(line);
+                            output.Add(line);
                         }
                         break;
                     case "skip_optimizations":
                     case "enable_d3d11_debug_symbols":
                         break;
                     case "multi_compile_fwdbase":
-                        pragmaOutput.Add("#pragma multi_compile DIRECTIONAL");
-                        pragmaOutput.Add("#pragma multi_compile LIGHTPROBE_SH");
+                        output.Add("#pragma multi_compile DIRECTIONAL");
+                        output.Add("#pragma multi_compile LIGHTPROBE_SH");
                         if (!stripShadowVariants)
-                            pragmaOutput.Add("#pragma multi_compile _ SHADOWS_SCREEN");
+                            output.Add("#pragma multi_compile _ SHADOWS_SCREEN");
                         break;
                     case "multi_compile_fwdadd_fullshadows":
-                        pragmaOutput.Add(stripShadowVariants ? "#pragma multi_compile_fwdadd" : "#pragma multi_compile_fwdadd_fullshadows");
+                        output.Add(stripShadowVariants ? "#pragma multi_compile_fwdadd" : "#pragma multi_compile_fwdadd_fullshadows");
                         break;
                     default:
                         if (!identifier.StartsWithSimple("shader_feature")) {
-                            pragmaOutput.Add(line);
+                            output.Add(line);
                         }
                         break;
                 }
@@ -3624,7 +3726,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
                     var includeName = $"{sanitizedShaderName}-{GetMD5Hash(output)[..12]}" + (line == "CGPROGRAM" ? ".cginc" : ".hlsl");
                     outputIncludes.Add((includeName, output));
                     output = pragmaOutput;
-                    output.Add($"#include \"{includeName}\"");
+                    output.Add($"#include_with_pragmas \"{includeName}\"");
                     output.Add(endSymbol);
                 }
             }
@@ -3677,6 +3779,22 @@ namespace d4rkpl4y3r.AvatarOptimizer
             optimizedShader.files = new() { ("Shader", output) };
             optimizedShader.files.AddRange(outputIncludes);
             optimizedShader.SetName($"{sanitizedShaderName}_{shaderHash[..4]}_{shaderHash[4..12]}");
+            static List<string> IndentContent(List<string> content)
+            {
+                int indentLevel = 0;
+                for (int i = 0; i < content.Count; i++)
+                {
+                    var line = content[i];
+                    if (line.StartsWithSimple("}"))
+                        indentLevel--;
+                    indentLevel = System.Math.Max(indentLevel, 0);
+                    content[i] = new string(' ', indentLevel * 4) + line;
+                    if (line.StartsWithSimple("{"))
+                        indentLevel++;
+                }
+                return content;
+            }
+            optimizedShader.files = optimizedShader.files.Select(f => (f.name, IndentContent(f.lines))).ToList();
         }
     }
 }

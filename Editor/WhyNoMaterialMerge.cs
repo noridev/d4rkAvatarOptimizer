@@ -75,12 +75,40 @@ namespace moe.noridev.d4rkavataroptimizer
             return slot;
         }
 
+        private void HelpBox(string message, int fontSize, MessageType type)
+        {
+            var style = new GUIStyle(EditorStyles.helpBox) { fontSize = fontSize };
+            Texture icon = type switch
+            {
+                MessageType.Info => EditorGUIUtility.IconContent("console.infoicon").image,
+                MessageType.Warning => EditorGUIUtility.IconContent("console.warnicon").image,
+                MessageType.Error => EditorGUIUtility.IconContent("console.erroricon").image,
+                _ => null
+            };
+            EditorGUILayout.LabelField(new GUIContent(message, icon), style);
+        }
+
         public void OnGUI()
         {
             using (new EditorGUILayout.VerticalScope(GUI.skin.box))
             {
                 var lockLabel = new GUIContent("Lock Avatar Auto Selection", "When enabled, the avatar and optimizer will not auto select based on your selection in the hierarchy.");
-                lockAvatarSelection = EditorGUILayout.ToggleLeft(lockLabel, lockAvatarSelection);
+                var descLabel = new GUIContent("", "The avatar descriptor to analyze.\nThis will auto select based on your selection in the hierarchy.");
+                var optLabel = new GUIContent("", "The d4rkAvatarOptimizer component on the avatar to analyze.\nThis will auto select based on the selected avatar.");
+
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    GUILayout.Space(15 * EditorGUI.indentLevel);
+                    lockAvatarSelection = GUILayout.Toggle(lockAvatarSelection, lockLabel, GUI.skin.button, GUILayout.ExpandWidth(false));
+                    var prevIndent = EditorGUI.indentLevel;
+                    EditorGUI.indentLevel = 0;
+                    avatar = EditorGUILayout.ObjectField(avatar, typeof(VRCAvatarDescriptor), true) as VRCAvatarDescriptor;
+                    GUI.Label(GUILayoutUtility.GetLastRect(), descLabel);
+                    optimizer = EditorGUILayout.ObjectField(optimizer, typeof(d4rkAvatarOptimizer), true) as d4rkAvatarOptimizer;
+                    GUI.Label(GUILayoutUtility.GetLastRect(), optLabel);
+                    EditorGUI.indentLevel = prevIndent;
+                }
+
                 if (!lockAvatarSelection && Selection.activeGameObject != null)
                 {
                     var currentTransform = Selection.activeGameObject.transform;
@@ -100,35 +128,31 @@ namespace moe.noridev.d4rkavataroptimizer
                         optimizer = avatar.GetComponentInChildren<d4rkAvatarOptimizer>(includeInactive: false);
                     }
                 }
-                var descLabel = new GUIContent("Avatar", "The avatar descriptor to analyze.\nThis will auto select based on your selection in the hierarchy.");
-                avatar = EditorGUILayout.ObjectField(descLabel, avatar, typeof(VRCAvatarDescriptor), true) as VRCAvatarDescriptor;
-                var optLabel = new GUIContent("Optimizer", "The d4rkAvatarOptimizer component on the avatar to analyze.\nThis will auto select based on the selected avatar.");
-                optimizer = EditorGUILayout.ObjectField(optLabel, optimizer, typeof(d4rkAvatarOptimizer), true) as d4rkAvatarOptimizer;
             }
             if (optimizer == null || avatar == null)
             {
-                EditorGUILayout.HelpBox("Select an avatar with d4rkAvatarOptimizer to see why material merging is not possible.", MessageType.Warning);
+                HelpBox("Select an avatar with d4rkAvatarOptimizer to see why material merging is not possible.", EditorStyles.helpBox.fontSize + 2, MessageType.Warning);
                 return;
             }
             using (new EditorGUILayout.VerticalScope(GUI.skin.box))
             {
                 if (showInfoBoxes = EditorGUILayout.Foldout(showInfoBoxes, "Show Info", toggleOnLabelClick: true))
                 {
-                    EditorGUILayout.HelpBox(
+                    HelpBox(
                         "This tool allows you to analyze why certain material slots on your avatar cannot be merged by the d4rkAvatarOptimizer.\n\n" +
                         "1. Assign two material slots (Slot A and Slot B) from the avatar's renderers.\n" +
                         "2. The tool will analyze if these material slots can be merged based on the optimizer's settings.\n\n" +
                         "You can select material slots directly from the merge preview below by clicking on the A or B buttons respectively. \n" +
                         "This tool does not check if the renderers using these slots can be merged in the first place, only if the material slots themselves can.",
-                        MessageType.Info);
+                        EditorStyles.helpBox.fontSize + 1, MessageType.Info);
                     var tools = optimizer.GetNonDestructiveToolsUsedOnAvatar();
                     if (tools.Count > 0)
                     {
-                        EditorGUILayout.HelpBox(
+                        HelpBox(
                             "The following non-destructive tools are found on the avatar:\n" +
                             string.Join(", ", tools) +
                             "\nThis means the merge analysis can be wrong as these tools can change the avatar at build time which the optimizer can't see before it happens.",
-                            MessageType.Warning);
+                            EditorStyles.helpBox.fontSize + 1, MessageType.Warning);
                     }
                 }
             }
@@ -136,22 +160,24 @@ namespace moe.noridev.d4rkavataroptimizer
             {
                 slotA = MaterialSlotField("Slot A", slotA);
                 slotB = MaterialSlotField("Slot B", slotB);
+                (string message, MessageType icon) msg;
                 if (slotA.renderer == null || slotB.renderer == null)
                 {
-                    EditorGUILayout.HelpBox("Please assign both material slots to analyze.", MessageType.Info);
+                    msg = ("Please assign both material slots to analyze.", MessageType.Info);
                 }
                 else
                 {
                     var result = optimizer.CanCombineMaterialsError(new List<MaterialSlot>() { slotA }, slotB);
                     if (string.IsNullOrEmpty(result))
                     {
-                        EditorGUILayout.HelpBox("Materials can be merged!", MessageType.Info);
+                        msg = ("Materials can be merged!", MessageType.Info);
                     }
                     else
                     {
-                        EditorGUILayout.HelpBox(result, MessageType.Warning);
+                        msg = (result, MessageType.Warning);
                     }
                 }
+                HelpBox(msg.message, EditorStyles.helpBox.fontSize + 2, msg.icon);
             }
             using var scrollView = new EditorGUILayout.ScrollViewScope(scrollPos);
             scrollPos = scrollView.scrollPosition;
