@@ -7,35 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [2.0.2] - 2026-04-12
 Based on d4rkAvatarOptimizer version: <b>4.3.0</b>
 
+### Changed
+- 기반 d4rkAvatarOptimizer 버전 업데이트 (<small>4.0.1</small> -> **4.3.0**)
+
 ---
 
 ## [2.0.1] - 2026-01-31
 Based on d4rkAvatarOptimizer version: <b>4.0.1</b>
+
+### Changed
+- 기반 d4rkAvatarOptimizer 버전 업데이트 (<small>4.0.0</small> -> **4.0.1**)
 
 ---
 
 ## [2.0.0] - 2025-11-30
 Based on d4rkAvatarOptimizer version: <b>4.0.0</b>
 
+### Changed
+- 기반 d4rkAvatarOptimizer 버전 업데이트 (<small>3.12.5</small> -> **4.0.0**)
+
 ---
 
 ## [1.1.13] - 2025-11-16
 Based on d4rkAvatarOptimizer version: <b>3.12.5</b>
+
+### Changed
+- 기반 d4rkAvatarOptimizer 버전 업데이트 (<small>3.12.4</small> -> **3.12.5**)
 
 ---
 
 ## [1.1.12] - 2025-10-12
 Based on d4rkAvatarOptimizer version: <b>3.12.4</b>
 
+### Changed
+- 기반 d4rkAvatarOptimizer 버전 업데이트 (<small>3.12.1</small> -> **3.12.4**)
+
 ---
 
 ## [1.1.11] - 2025-09-15
 Based on d4rkAvatarOptimizer version: <b>3.12.1</b>
 
+### Changed
+- 기반 d4rkAvatarOptimizer 버전 업데이트 (<small>3.12.0</small> -> **3.12.1**)
+
 ---
 
 ## [1.1.10] - 2025-09-13
 Based on d4rkAvatarOptimizer version: <b>3.12.0</b>
+
+### Changed
+- 기반 d4rkAvatarOptimizer 버전 업데이트 (<small>3.11.0</small> -> **3.12.0**)
 
 ---
 
