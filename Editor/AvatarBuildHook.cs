@@ -4,7 +4,7 @@ using UnityEngine;
 using UnityEditor;
 using VRC.SDKBase.Editor.BuildPipeline;
 
-namespace d4rkpl4y3r.AvatarOptimizer
+namespace moe.noridev.AvatarOptimizer
 {
     [InitializeOnLoad]
     public class AvatarBuildHook : IVRCSDKPreprocessAvatarCallback

@@ -1,16 +1,16 @@
 ﻿#if UNITY_EDITOR
 using System.Collections.Generic;
 using System.Linq;
-using d4rkpl4y3r.AvatarOptimizer.Extensions;
+using moe.noridev.AvatarOptimizer.Extensions;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEngine;
 using VRC.SDK3.Avatars.Components;
 using VRC.SDKBase;
 using BlendableLayer = VRC.SDKBase.VRC_AnimatorLayerControl.BlendableLayer;
-using d4rkpl4y3r.AvatarOptimizer.Util;
+using moe.noridev.AvatarOptimizer.Util;
 
-namespace d4rkpl4y3r.AvatarOptimizer
+namespace moe.noridev.AvatarOptimizer
 {
     // based on https://github.com/VRLabs/Avatars-3.0-Manager/blob/main/Editor/AnimatorCloner.cs
     public class AnimatorOptimizer

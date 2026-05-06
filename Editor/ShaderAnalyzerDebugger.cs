@@ -5,7 +5,7 @@ using System.Linq;
 using System.IO;
 using UnityEngine;
 using UnityEditor;
-using d4rkpl4y3r.AvatarOptimizer;
+using moe.noridev.AvatarOptimizer;
 using System.Diagnostics;
 
 public class ShaderAnalyzerDebugger : EditorWindow

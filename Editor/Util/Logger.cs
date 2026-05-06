@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 
-namespace d4rkpl4y3r.AvatarOptimizer.Util
+namespace moe.noridev.AvatarOptimizer.Util
 {
     public class Logger
     {

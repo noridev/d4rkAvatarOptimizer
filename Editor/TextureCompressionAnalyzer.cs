@@ -7,7 +7,7 @@ using UnityEditor;
 using System.Linq;
 using System.Reflection;
 
-namespace d4rkpl4y3r.AvatarOptimizer
+namespace moe.noridev.AvatarOptimizer
 {
     public class TextureCompressionAnalyzer : EditorWindow
     {

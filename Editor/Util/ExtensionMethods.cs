@@ -6,7 +6,7 @@ using Unity.Collections;
 using UnityEditor.Animations;
 using UnityEngine;
 
-namespace d4rkpl4y3r.AvatarOptimizer.Extensions
+namespace moe.noridev.AvatarOptimizer.Extensions
 {
     public class InvariantCultureScope : System.IDisposable
     {

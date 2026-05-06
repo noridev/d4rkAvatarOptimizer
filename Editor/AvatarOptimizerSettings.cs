@@ -5,7 +5,7 @@ using System.IO;
 using UnityEditor;
 using System.IO.Compression;
 
-namespace d4rkpl4y3r.AvatarOptimizer
+namespace moe.noridev.AvatarOptimizer
 {
     public class AvatarOptimizerSettings : EditorWindow
     {

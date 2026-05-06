@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 
-namespace d4rkpl4y3r.AvatarOptimizer.Util
+namespace moe.noridev.AvatarOptimizer.Util
 {
     static class Profiler
     {

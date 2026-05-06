@@ -13,9 +13,9 @@ using System.Reflection;
 using UnityEngine.Rendering;
 using UnityEditor;
 using UnityEditor.Animations;
-using d4rkpl4y3r.AvatarOptimizer;
-using d4rkpl4y3r.AvatarOptimizer.Util;
-using d4rkpl4y3r.AvatarOptimizer.Extensions;
+using moe.noridev.AvatarOptimizer;
+using moe.noridev.AvatarOptimizer.Util;
+using moe.noridev.AvatarOptimizer.Extensions;
 using VRC.Dynamics;
 using VRC.SDK3.Avatars.Components;
 
@@ -564,7 +564,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
     {
         var assembly = typeof(d4rkAvatarOptimizer).Assembly;
         var asmdefPath = CompilationPipeline.GetAssemblyDefinitionFilePathFromAssemblyName(assembly.GetName().FullName);
-        var inPackageAsmdefPath = "/Editor/d4rkpl4y3r.d4rkavataroptimizer.Editor.asmdef";
+        var inPackageAsmdefPath = "/Editor/moe.noridev.d4rkavataroptimizer.Editor.asmdef";
         var packageInfo = PackageInfo.FindForAssembly(assembly);
         string trashBinRoot;
         if (packageInfo?.source == UnityEditor.PackageManager.PackageSource.Embedded
@@ -587,7 +587,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
         return (trashBinRoot, "TrashBin", $"{trashBinRoot}/TrashBin/");
     }
 
-    public static d4rkpl4y3r.AvatarOptimizer.Util.Logger log = null;
+    public static moe.noridev.AvatarOptimizer.Util.Logger log = null;
 
     private void ClearTrashBin()
     {

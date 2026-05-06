@@ -10,12 +10,12 @@ using System.Threading;
 using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
-using d4rkpl4y3r.AvatarOptimizer.Util;
-using d4rkpl4y3r.AvatarOptimizer.Extensions;
+using moe.noridev.AvatarOptimizer.Util;
+using moe.noridev.AvatarOptimizer.Extensions;
 using System.Security.Cryptography;
 using System.Configuration;
 
-namespace d4rkpl4y3r.AvatarOptimizer
+namespace moe.noridev.AvatarOptimizer
 {
     public class ParsedShader
     {
