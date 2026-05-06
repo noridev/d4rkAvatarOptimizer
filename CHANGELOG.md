@@ -1,3 +1,70 @@
+## v4.4.0
+### Features
+* Add support for negative speed toggles in the animator optimizer.
+* Add support for entry -> A -> B -> exit type toggles in the animator optimizer.
+
+### Changes
+* Log file:
+  * Show all phys bone dependencies when using `Disable Phys Bones When Unused`.
+
+### Bug Fixes
+* Fix `Disable Phys Bones When Unused` not working properly because it counted `VRC.Dynamics.ParentChangeDetector` as dependencies.
+* Fix Shader Toggle default values not getting set correctly.
+  * This was caused by last version's material property block clear being to early in the optimization process.
+* Fix renderers getting combined when their component and game object get animated separately.
+
+## v4.3.6
+### Changes
+* Log file:
+  * Avatar stats now contain total unique animator parameters.
+  * Fx layer optimization now also prints out the reasons for unmerged layers.
+  * Fx layer merged layers now also print their type of layer.
+
+### Bug Fixes
+* Clear material property block after merging meshes.
+  * This fixes inconsistencies between editor and in game.
+* Reorder material slot in merged meshes so that a compatible shader is in slot 0 when using `Shader Toggles`.
+  * This fixes a bug with wd on affecting the shader toggle material property animation.
+* Fix crash when a vrc animator layer control specifies a negative layer index or one that is equal to the amount of layers.
+
+## v4.3.5
+### Changes
+* Log file:
+  * Merged meshes now log when they delete their source game objects.
+  * Merged meshes now log when they create new sub-container game objects.
+  * Only list reparented bones that actually had vertices weighted to them.
+
+### Bug Fixes
+* Fix bones getting reparented even if their parent to local matrix is different in the bind pose and the transform hierarchy.
+
+## v4.3.4
+### Changes
+* `Delete Unused GameObjects` now re-parents non moving bones to the first moving parent again.
+* Count total unique bones in the avatar stats in the log file.
+
+### Bug Fixes
+* Fix crash when an animation clip has a additive reference pose clip (for real this time). [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues/188)
+* Fix animator analysis not taking into account special animation layers in some places.
+
+## v4.3.3
+### Changes
+* `Combine Motion Time Approximation` now also takes samples at the keyframes of the curves.
+
+### Bug Fixes
+* Fix crash when an animation clip has a additive reference pose clip. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues/187)
+
+## v4.3.2
+### Bug Fixes
+* Fix crash when animator controllers have illegal file name characters in their name.
+* Improved animation clip handling:
+  * Deduplication of dummy clips now differentiates by looping and framerate
+  * Clips with non standard clip settings will no longer get turned into dummy clips
+  * additiveReferencePoseClip references now get their clips replaced by fixed clips
+
+## v4.3.1
+### Bug Fixes
+* Fix crash when using `VRCRaycast` components in vrc sdk 3.10.3
+
 ## v4.3.0
 ### Features
 * `Delete Unused GameObjects` now supports animator layer masks.
@@ -7,7 +74,9 @@
 ### Changes
 * Animators that are not on the root no longer show a validation warning.  
   Instead they automatically add all things they animate to the exclusions on build.
-* Automatic exclusions are now grouped by their source in the log file.
+* Log file changes:
+  * Automatic exclusions are now grouped by their source.
+  * Avatar stats now include number of unique curve bindings.
 * Better selection of root bone and probe anchor when merging meshes with different ones.
   * Highest priority is for the bone set by the most meshes
   * Tie breaker is in order of humanoid bone > child of humanoid bone > any other bone

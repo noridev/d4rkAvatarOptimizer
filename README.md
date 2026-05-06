@@ -2,10 +2,11 @@
 d4rkpl4y3r's VRChat avatar 3.0 optimizer that aims to reduce skinned mesh & material count.
 
 ## How to Use
-1. Add the d4rkAvatarOptimizer component to your avatar.
+1. Add the d4rkAvatarOptimizer component to your avatar. This can be on any transform.
 2. Upload the avatar to VRChat. The optimizations will be applied before upload automatically with the default settings.
 
-Alternatively you can click the "Create Optimized Copy" button to create a new avatar with optimized materials and meshes. That way you can test the optimized version in editor to validate it works properly before uploading it. If everything works correctly you can then upload that optimized copy.
+Alternatively you can click the "Create Optimized Copy" button to create a new avatar with optimized materials and meshes. That way you can test the optimized version in editor to validate it works properly before uploading it. If everything works correctly you can then upload that optimized copy.  
+This button is the old workflow and I recommend against using it as it can't work properly with nondestructive tooling such as VRCFury or ModularAvatar.
 
 ## Installation
 To install the optimizer with VCC you need to add the url `https://vpm.noridev.moe/index.json` as a custom repository.
@@ -29,9 +30,12 @@ After that you can add and update the optimizer like any other packages in your 
 In-game, open the action menu (the round one) -> Options -> Avatar -> Fallback Shaders
   * If anything in-game looks off, fall back to the "Basic" preset
 
+If you want to look into more detail there is an extra document here: [For Advanced Users](./Documentation~/ForAdvancedUsers.md)  
+Also read the preset & individual option documentation below.
+
 ## Presets
 ### Basic
-This preset only uses optimizations that don't affect the behavior of the avatar.
+This preset only uses optimizations that don't affect the behavior of the avatar [(some exceptions apply)](./Documentation~/ForAdvancedUsers.md#tradeoffs-of-the-basic-preset)
 * Removes unused components, blend shapes & bones from skinned meshes
 * Bakes non animated blend shapes into the mesh
 * Merges all skinned meshes that are always animated in the same way
@@ -198,6 +202,7 @@ You can exclude certain parts of the model from all optimizations. Any Transform
 ## Create Optimized Copy
 Creates a copy of the avatar and performs the selected optimizations on the copy.
 Disables the original avatar so only the copy is active.  
+If the original avatar has no avatar id assigned it will get a new one assigned to it. This ensures that subsequent uploads all point to the same id.  
 None of the original assets will be changed so even if the optimizer fails your avatar is still safe!  
 It also deletes the assets from the previous optimized copy. You should never change the optimized copy, it is only intended to be tested/uploaded and then get deleted again.
 

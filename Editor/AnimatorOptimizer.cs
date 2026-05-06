@@ -27,17 +27,13 @@ namespace d4rkpl4y3r.AvatarOptimizer
         private HashSet<string> intsToChangeToFloat = new HashSet<string>();
         private List<(EditorCurveBinding binding, float value)> constantCurvesToAdd = new List<(EditorCurveBinding binding, float value)>();
         private bool isFxLayer = false;
+        private string mergedLayersParameter = "d4rkAvatarOptimizer_MergedLayers_Weight";
 
         private AnimatorOptimizer(AnimatorController target, AnimatorController source, string path)
         {
             this.target = target;
             this.source = source;
             assetPath = path;
-        }
-
-        public static AnimatorController Copy(AnimatorController source, string path, Dictionary<int, int> fxLayerMap)
-        {
-            return Run(source, path, fxLayerMap);
         }
 
         public static AnimatorController Run(AnimatorController source, string path, Dictionary<int, int> fxLayerMap, List<int> layersToMerge = null, List<int> layersToDestroy = null, List<(EditorCurveBinding binding, float value)> constantCurvesToAdd = null)
@@ -56,6 +52,35 @@ namespace d4rkpl4y3r.AvatarOptimizer
             optimizer.isFxLayer = constantCurvesToAdd != null;
             optimizer.constantCurvesToAdd = constantCurvesToAdd ?? new();
             return optimizer.Run();
+        }
+
+        public class Transition
+        {
+            public AnimatorState destinationState;
+            public AnimatorCondition[] conditions;
+            public bool mute;
+            public bool solo;
+            public float duration;
+            public bool hasExitTime;
+            public float exitTime;
+        }
+
+        public static List<Transition> GetNonEntryTransitions(AnimatorStateMachine sm)
+        {
+            List<Transition> transitions = new();
+            foreach (var t in sm.anyStateTransitions.Concat(sm.states.SelectMany(s => s.state.transitions)))
+            {
+                transitions.Add(new() {
+                    destinationState = t.isExit ? sm.defaultState : t.destinationState,
+                    conditions = t.conditions,
+                    mute = t.mute,
+                    solo = t.solo,
+                    duration = t.duration,
+                    hasExitTime = t.hasExitTime,
+                    exitTime = t.exitTime
+                });
+            }
+            return transitions;
         }
 
         private void AddToAsset(Object o)
@@ -104,7 +129,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
                 if (layersToMerge.Count > 0 || constantCurvesToAdd.Count > 0)
                 {
                     var blendTreeDummyWeight = new AnimatorControllerParameter {
-                        name = "d4rkAvatarOptimizer_MergedLayers_Weight",
+                        name = mergedLayersParameter = target.MakeUniqueParameterName(mergedLayersParameter),
                         type = AnimatorControllerParameterType.Float,
                         defaultFloat = 1f,
                         defaultBool = true,
@@ -125,7 +150,10 @@ namespace d4rkpl4y3r.AvatarOptimizer
                     AnimatorControllerLayer newL = CloneLayer(sourceLayers[i], i == 0);
                     newL.name = target.MakeUniqueLayerName(newL.name);
                     newL.stateMachine.name = newL.name;
-                    target.AddLayer(newL);
+                    using (new Profiler.Section($"AnimatorOptimizer.AddLayer"))
+                    {
+                        target.AddLayer(newL);
+                    }
                     if (newL.syncedLayerIndex >= 0)
                         syncedLayers.Add((layerIndex, sourceLayers[i]));
                     layerIndex++;
@@ -215,17 +243,25 @@ namespace d4rkpl4y3r.AvatarOptimizer
             }
             var motionTimeSampleCount = AvatarOptimizerSettings.MotionTimeApproximationSampleCount;
             var motionTimeSamplePoints = Enumerable.Range(0, motionTimeSampleCount).Select(x => (float)x / (motionTimeSampleCount - 1)).ToArray();
-            Motion ConvertStateToMotion(AnimatorState s) {
+            Motion ConvertStateToMotion(AnimatorState s, bool negativeSpeedToggle) {
                 if (s.motion is BlendTree tree) {
                     return CloneBlendTree(null, tree);
                 } else if (s.motion is AnimationClip clip) {
                     (AnimationCurve curve, bool isEulerAngleBinding)[] curves = AnimationUtility.GetCurveBindings(clip)
                         .Select(binding => (AnimationUtility.GetEditorCurve(clip, binding), binding.propertyName.Contains("localEulerAngles"))).ToArray();
-                    float maxKeyframeTime = curves.Max(x => (float?)x.curve.keys.Max(y => y.time)) ?? 0;
+                    var keys = curves.SelectMany(x => x.curve.keys.Select(k => k.time)).Distinct().ToArray();
+                    float maxKeyframeTime = keys.Length > 0 ? keys.Max() : 0;
+                    if (negativeSpeedToggle) {
+                        return CloneFromTime(clip, s.speed > 0 ? maxKeyframeTime : 0, clip.name);
+                    }
                     if (!s.timeParameterActive || maxKeyframeTime == 0) {
                         return CloneFromTime(clip, 0, clip.name);
                     }
-                    var interpolationPoints = motionTimeSamplePoints.ToList();
+                    var interpolationPoints = motionTimeSamplePoints
+                        .Concat(keys.Select(t => t / maxKeyframeTime))
+                        .Distinct()
+                        .OrderBy(x => x)
+                        .ToList();
                     bool removedSomePoint = true;
                     while (removedSomePoint) {
                         removedSomePoint = false;
@@ -264,22 +300,25 @@ namespace d4rkpl4y3r.AvatarOptimizer
                 var layer = sourceLayers[i].stateMachine;
                 var layerStates = layer.states;
                 Motion layerMotion = null;
+                bool negativeSpeedToggle = layerStates.Length == 2
+                    && layerStates.Any(s => s.state.speed < 0)
+                    && layerStates[0].state.motion == layerStates[1].state.motion;
                 if (layerStates.Length == 2) {
-                    var layerMotions = layerStates.Select(x => ConvertStateToMotion(x.state)).ToArray();
+                    var layerMotions = layerStates.Select(x => ConvertStateToMotion(x.state, negativeSpeedToggle)).ToArray();
                     if (IsNullOrEmpty(layerMotions[0]))
                         layerMotions[0] = CloneAndFlipCurves(layerMotions[1] as AnimationClip);
                     if (IsNullOrEmpty(layerMotions[1]))
                         layerMotions[1] = CloneAndFlipCurves(layerMotions[0] as AnimationClip);
 
-                    var transitions = layer.anyStateTransitions.Concat(layerStates.SelectMany(x => x.state.transitions)).ToArray();
+                    var transitions = GetNonEntryTransitions(layer);
                     var singleIndex = transitions.Count(x => x.destinationState == layerStates[0].state) == 1 ? 0 : 1;
                     var andMotion = layerMotions[singleIndex];
                     var orMotion = layerMotions[1 - singleIndex];
                     foreach (var condition in transitions.First(c => c.destinationState == layerStates[singleIndex].state).conditions)
                     {
                         var innerTreeMotions = new ChildMotion[2] {
-                            new ChildMotion() { motion = orMotion },
-                            new ChildMotion() { motion = andMotion },
+                            new() { motion = orMotion },
+                            new() { motion = andMotion },
                         };
                         var param = source.parameters.FirstOrDefault(x => x.name == condition.parameter);
                         if (condition.mode == AnimatorConditionMode.IfNot)
@@ -311,16 +350,16 @@ namespace d4rkpl4y3r.AvatarOptimizer
                     }
                     layerMotion = andMotion;
                 } else if (layerStates.Length == 1) {
-                    layerMotion = ConvertStateToMotion(layerStates[0].state);
+                    layerMotion = ConvertStateToMotion(layerStates[0].state, negativeSpeedToggle);
                 } else {
                     var transitions = layer.anyStateTransitions.OrderBy(x => x.conditions[0].threshold).ToArray();
-                    var layerMotions = transitions.Select(x => ConvertStateToMotion(x.destinationState)).ToArray();
+                    var layerMotions = transitions.Select(x => ConvertStateToMotion(x.destinationState, negativeSpeedToggle)).ToArray();
                     layerMotion = CreateBlendTree(transitions[0].conditions[0].parameter, layerMotions.Select((x, index) => new ChildMotion() { motion = x, threshold = index}).ToArray());
                 }
                 layerMotion.name = sourceLayers[i].name;
                 motions.Add(new ChildMotion() {
                     motion = layerMotion,
-                    directBlendParameter = "d4rkAvatarOptimizer_MergedLayers_Weight",
+                    directBlendParameter = mergedLayersParameter,
                     timeScale = 1f
                 });
             }
@@ -339,7 +378,7 @@ namespace d4rkpl4y3r.AvatarOptimizer
                 AddToAsset(layerMotion);
                 motions.Add(new ChildMotion() {
                     motion = layerMotion,
-                    directBlendParameter = "d4rkAvatarOptimizer_MergedLayers_Weight",
+                    directBlendParameter = mergedLayersParameter,
                     timeScale = 1f
                 });
             }
@@ -363,15 +402,18 @@ namespace d4rkpl4y3r.AvatarOptimizer
                 }
             };
             AddToAsset(stateMachine);
-            target.AddLayer(new AnimatorControllerLayer {
-                avatarMask = null,
-                blendingMode = AnimatorLayerBlendingMode.Override,
-                defaultWeight = 1f,
-                iKPass = false,
-                name = target.MakeUniqueLayerName("d4rkAvatarOptimizer_MergedLayers"),
-                syncedLayerAffectsTiming = false,
-                stateMachine = stateMachine
-            });
+            using (new Profiler.Section($"AnimatorOptimizer.AddLayer"))
+            {
+                target.AddLayer(new AnimatorControllerLayer {
+                    avatarMask = null,
+                    blendingMode = AnimatorLayerBlendingMode.Override,
+                    defaultWeight = 1f,
+                    iKPass = false,
+                    name = target.MakeUniqueLayerName("d4rkAvatarOptimizer_MergedLayers"),
+                    syncedLayerAffectsTiming = false,
+                    stateMachine = stateMachine
+                });
+            }
         }
 
         private AnimatorControllerLayer CloneLayer(AnimatorControllerLayer old, bool isFirstLayer = false)
