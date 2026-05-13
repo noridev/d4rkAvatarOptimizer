@@ -1096,6 +1096,8 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             return false;
         if (list[0].receiveShadows != candidate.receiveShadows)
             return false;
+        if (list[0].transform == GetRootTransform() || candidate.transform == GetRootTransform())
+            return false;
         if (!RenderersHaveSameRootBoneScaleSign(list[0], candidate))
             return false;
         bool OneOfParentsHasGameObjectToggleThatTheOthersArentChildrenOf(Transform t, string[] otherPaths)
@@ -3321,17 +3323,22 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
         }
     }
 
-    public bool IsHumanoid()
+    public int GetBaseLayerCount()
     {
-        var avDescriptor = GetAvatarDescriptor();
-        var rootAnimator = avDescriptor != null ? avDescriptor.GetComponent<Animator>() : null;
-        return rootAnimator != null && rootAnimator.avatar != null && rootAnimator.avatar.isHuman;
+        var av = GetAvatarDescriptor();
+        if (av == null)
+            return 0;
+        if (!av.TryGetComponent<Animator>(out var animator) || animator == null)
+            return 5;
+        if (animator.avatar == null || !animator.avatar.isHuman)
+            return 3;
+        return 5;
     }
 
     public AnimatorController GetFXLayer()
     {
         var avDescriptor = GetAvatarDescriptor();
-        var baseLayerCount = IsHumanoid() ? 5 : 3;
+        var baseLayerCount = GetBaseLayerCount();
         if (avDescriptor == null || avDescriptor.baseAnimationLayers.Length != baseLayerCount)
             return null;
         return avDescriptor.baseAnimationLayers[baseLayerCount - 1].animatorController as AnimatorController;
@@ -5377,9 +5384,8 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             return;
         HashSet<Transform> humanoidBones = new();
         HashSet<Transform> childrenOfHumanoidBones = new();
-        if (IsHumanoid())
+        if (avDescriptor.TryGetComponent<Animator>(out var animator) && animator != null && animator.isHuman)
         {
-            var animator = avDescriptor.GetComponent<Animator>();
             foreach (var humanBone in System.Enum.GetValues(typeof(HumanBodyBones)).Cast<HumanBodyBones>())
             {
                 if (humanBone == HumanBodyBones.LastBone)
@@ -5517,7 +5523,6 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             // without this fix the merged mesh would disappear locally
             if (MergeSkinnedMeshesWithNaNimation && basicMergedMeshes.Count > 1)
             {
-                var animator = avDescriptor.GetComponent<Animator>();
                 if (animator != null && animator.isHuman)
                 {
                     var headBone = animator.GetBoneTransform(HumanBodyBones.Head);
@@ -6166,8 +6171,6 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             targetRenderer.probeAnchor = targetProbeAnchor;
             targetRenderer.sharedMesh = combinedMesh;
             targetRenderer.sharedMaterials = materials;
-            targetRenderer.bones = targetBones.ToArray();
-            targetRenderer.localBounds = targetBounds;
 
             foreach (var blendShape in blendShapeWeights)
             {
@@ -6192,8 +6195,14 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                     subContainer.transform.parent = go.transform;
                     subContainer.transform.SetLocalPositionAndRotation(Vector3.zero, Quaternion.identity);
                     subContainer.transform.localScale = Vector3.one;
-                    subContainer.SetActive(targetRenderer.gameObject.activeSelf);
+                    subContainer.SetActive(go.activeSelf);
                     transformFromOldPath[GetPathToRoot(go)] = subContainer.transform;
+
+                    for (int i = 0; i < targetBones.Count; i++)
+                    {
+                        if (targetBones[i] == go.transform)
+                            targetBones[i] = subContainer.transform;
+                    }
 
                     foreach (Transform child in children)
                     {
@@ -6227,6 +6236,8 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                     targetRenderer.enabled = true;
                 }
             }
+            targetRenderer.bones = targetBones.ToArray();
+            targetRenderer.localBounds = targetBounds;
 
             List<string> destroyedGameObjects = new();
             for (int meshID = 1; meshID < combinableSkinnedMeshes.Count; meshID++)
