@@ -27,6 +27,7 @@ namespace moe.noridev.AvatarOptimizer
         private HashSet<string> intsToChangeToFloat = new HashSet<string>();
         private List<(EditorCurveBinding binding, float value)> constantCurvesToAdd = new List<(EditorCurveBinding binding, float value)>();
         private bool isFxLayer = false;
+        private List<string> logMessages;
         private string mergedLayersParameter = "d4rkAvatarOptimizer_MergedLayers_Weight";
 
         private AnimatorOptimizer(AnimatorController target, AnimatorController source, string path)
@@ -36,7 +37,7 @@ namespace moe.noridev.AvatarOptimizer
             assetPath = path;
         }
 
-        public static AnimatorController Run(AnimatorController source, string path, Dictionary<int, int> fxLayerMap, List<int> layersToMerge = null, List<int> layersToDestroy = null, List<(EditorCurveBinding binding, float value)> constantCurvesToAdd = null)
+        public static AnimatorController Run(AnimatorController source, string path, Dictionary<int, int> fxLayerMap, List<string> logMessages, List<int> layersToMerge = null, List<int> layersToDestroy = null, List<(EditorCurveBinding binding, float value)> constantCurvesToAdd = null)
         {
             var target = new AnimatorController();
             target.name = $"{source.name}(Optimized)";
@@ -51,6 +52,7 @@ namespace moe.noridev.AvatarOptimizer
             optimizer.layersToDestroy = new HashSet<int>(layersToDestroy ?? new());
             optimizer.isFxLayer = constantCurvesToAdd != null;
             optimizer.constantCurvesToAdd = constantCurvesToAdd ?? new();
+            optimizer.logMessages = logMessages;
             return optimizer.Run();
         }
 
@@ -87,6 +89,22 @@ namespace moe.noridev.AvatarOptimizer
         {
             using var _ = new Profiler.Section("AnimatorOptimizer.AddToAsset()");
             AssetDatabase.AddObjectToAsset(o, assetPath);
+        }
+
+        private readonly List<AnimatorControllerLayer> layersToAdd = new();
+        private readonly HashSet<string> layerNames = new();
+        private void AddLayer(AnimatorControllerLayer layer)
+        {
+            using var _ = new Profiler.Section($"AnimatorOptimizer.AddLayer");
+            var candidateName = layer.name;
+            int suffix = 1;
+            while (layerNames.Contains(candidateName))
+            {
+                candidateName = $"{layer.name}_{suffix++}";
+            }
+            layer.name = candidateName;
+            layerNames.Add(layer.name);
+            layersToAdd.Add(layer);
         }
 
         private AnimatorController Run() {
@@ -150,10 +168,7 @@ namespace moe.noridev.AvatarOptimizer
                     AnimatorControllerLayer newL = CloneLayer(sourceLayers[i], i == 0);
                     newL.name = target.MakeUniqueLayerName(newL.name);
                     newL.stateMachine.name = newL.name;
-                    using (new Profiler.Section($"AnimatorOptimizer.AddLayer"))
-                    {
-                        target.AddLayer(newL);
-                    }
+                    AddLayer(newL);
                     if (newL.syncedLayerIndex >= 0)
                         syncedLayers.Add((layerIndex, sourceLayers[i]));
                     layerIndex++;
@@ -174,6 +189,11 @@ namespace moe.noridev.AvatarOptimizer
             using (new Profiler.Section($"AnimatorOptimizer.MergeLayers"))
             {
                 MergeLayers();
+            }
+
+            using (new Profiler.Section($"AnimatorOptimizer.AddLayer"))
+            {
+                target.layers = target.layers.Concat(layersToAdd).ToArray();
             }
 
             EditorUtility.SetDirty(target);
@@ -255,7 +275,7 @@ namespace moe.noridev.AvatarOptimizer
                         return CloneFromTime(clip, s.speed > 0 ? maxKeyframeTime : 0, clip.name);
                     }
                     if (!s.timeParameterActive || maxKeyframeTime == 0) {
-                        return CloneFromTime(clip, 0, clip.name);
+                        return clip;
                     }
                     var interpolationPoints = motionTimeSamplePoints
                         .Concat(keys.Select(t => t / maxKeyframeTime))
@@ -395,25 +415,22 @@ namespace moe.noridev.AvatarOptimizer
                 name = "d4rkAvatarOptimizer_MergedLayers",
                 hideFlags = HideFlags.HideInHierarchy,
                 states = new ChildAnimatorState[1] {
-                    new ChildAnimatorState() {
+                    new() {
                         state = state,
                         position = new Vector3(250, 0, 0)
                     }
                 }
             };
             AddToAsset(stateMachine);
-            using (new Profiler.Section($"AnimatorOptimizer.AddLayer"))
-            {
-                target.AddLayer(new AnimatorControllerLayer {
-                    avatarMask = null,
-                    blendingMode = AnimatorLayerBlendingMode.Override,
-                    defaultWeight = 1f,
-                    iKPass = false,
-                    name = target.MakeUniqueLayerName("d4rkAvatarOptimizer_MergedLayers"),
-                    syncedLayerAffectsTiming = false,
-                    stateMachine = stateMachine
-                });
-            }
+            AddLayer(new AnimatorControllerLayer {
+                avatarMask = null,
+                blendingMode = AnimatorLayerBlendingMode.Override,
+                defaultWeight = 1f,
+                iKPass = false,
+                name = "d4rkAvatarOptimizer_MergedLayers",
+                syncedLayerAffectsTiming = false,
+                stateMachine = stateMachine
+            });
         }
 
         private AnimatorControllerLayer CloneLayer(AnimatorControllerLayer old, bool isFirstLayer = false)
@@ -427,7 +444,7 @@ namespace moe.noridev.AvatarOptimizer
                 name = old.name,
                 syncedLayerAffectsTiming = old.syncedLayerAffectsTiming,
                 syncedLayerIndex = isFxLayer && fxLayerMap.TryGetValue(old.syncedLayerIndex, out int newLayerIndex) ? newLayerIndex : old.syncedLayerIndex,
-                stateMachine = CloneStateMachine(old.stateMachine)
+                stateMachine = CloneStateMachine(old.stateMachine, old.name)
             };
             CloneTransitions(old.stateMachine, n.stateMachine);
             return n;
@@ -446,8 +463,38 @@ namespace moe.noridev.AvatarOptimizer
             }
         }
 
-        private AnimatorStateMachine CloneStateMachine(AnimatorStateMachine old)
+        private AnimatorStateMachine CloneStateMachine(AnimatorStateMachine old, string layerName)
         {
+            ChildAnimatorStateMachine CloneChildStateMachine(ChildAnimatorStateMachine old)
+            {
+                var n = new ChildAnimatorStateMachine
+                {
+                    position = old.position,
+                    stateMachine = CloneStateMachine(old.stateMachine, layerName)
+                };
+                return n;
+            }
+            ChildAnimatorState CloneChildAnimatorState(ChildAnimatorState old)
+            {
+                var n = new ChildAnimatorState
+                {
+                    position = old.position,
+                    state = CloneAnimatorState(old.state)
+                };
+                foreach (var oldb in old.state.behaviours)
+                {
+                    var behaviour = n.state.AddStateMachineBehaviour(oldb.GetType());
+                    if (behaviour == null)
+                    {
+                        Debug.LogWarning($"Failed to clone state machine behaviour of type '{oldb.GetType()}' in layer '{layerName}' on state '{old.state.name}'");
+                        logMessages.Add($"Warning: Failed to clone state machine behaviour of type '{oldb.GetType().FullName}' in layer '{layerName}' on state '{old.state.name}'");
+                        continue;
+                    }
+                    CloneBehaviourParameters(oldb, behaviour);
+                }
+                return n;
+            }
+
             var n = new AnimatorStateMachine
             {
                 anyStatePosition = old.anyStatePosition,
@@ -467,31 +514,12 @@ namespace moe.noridev.AvatarOptimizer
             foreach (var oldb in old.behaviours)
             {
                 var behaviour = n.AddStateMachineBehaviour(oldb.GetType());
-                CloneBehaviourParameters(oldb, behaviour);
-            }
-            return n;
-        }
-
-        private ChildAnimatorStateMachine CloneChildStateMachine(ChildAnimatorStateMachine old)
-        {
-            var n = new ChildAnimatorStateMachine
-            {
-                position = old.position,
-                stateMachine = CloneStateMachine(old.stateMachine)
-            };
-            return n;
-        }
-
-        private ChildAnimatorState CloneChildAnimatorState(ChildAnimatorState old)
-        {
-            var n = new ChildAnimatorState
-            {
-                position = old.position,
-                state = CloneAnimatorState(old.state)
-            };
-            foreach (var oldb in old.state.behaviours)
-            {
-                var behaviour = n.state.AddStateMachineBehaviour(oldb.GetType());
+                if (behaviour == null)
+                {
+                    Debug.LogWarning($"Failed to clone state machine behaviour of type '{oldb.GetType()}' in layer '{layerName}' on state machine '{old.name}'");
+                    logMessages.Add($"Warning: Failed to clone state machine behaviour of type '{oldb.GetType().FullName}' in layer '{layerName}' on state machine '{old.name}'");
+                    continue;
+                }
                 CloneBehaviourParameters(oldb, behaviour);
             }
             return n;

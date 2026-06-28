@@ -1,13 +1,36 @@
-## v4.4.1
+## v4.5.2
+### Bug Fixes
+* Fix `.orlconfshader` not being treated as orlshader by the shader analyzer.
+
+## v4.5.1
+### Bug Fixes
+* Fix crash with `Merge Same Dimension Textures` when one material has a non Texture2D assigned and the other material doesn't have any texture assigned in the same slot when they get compared for merging.
+* Fix crash when animator state behaviours fail to clone. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues/199)
+  * Also logs the type of the behaviour that failed to clone.
+* Fix crash when a vertex in a skinned mesh has 0 weights.
+
+## v4.5.0
+### Features
+* Log file:
+  * Detailed errors on why skinned meshes can't be merged when using `Merge Skinned Meshes`.
+* Add support for global phys bone colliders when using `Delete Unused Components`.
+
 ### Changes
 * Shader Analyzer:
   * More strictly validates pass pragmas and now reports which pass is missing a vertex or fragment pragma.
   * Shaders where a pragma references a vertex/geometry/fragment function that could not be found are now treated as unmergable instead of silently continuing.
   * Multiple pragmas of the same type in a pass now throw a parse error if they reference different functions.
+* Shader Optimizer:
+  * Preprocessor macros now also indent the generated shader code.
+  * Strip out `POI_PIPE == POI_URP` blocks from the generated shaders.
+  * `OPTIMIZER_ENABLED` define is now also added when using any `//ifex` statements in the shader.
+  * Removed some poi specific preprocessor handling that is handled more generically now.
 * Shader Analyzer Debugger:
   * Parse errors and unmergable shaders can now be grouped by their message.
   * Each warning/error message group is now shown in a foldout.
   * Remove mismatched curly brace section as this is now handled as a regular parse error.
+* Log file:
+  * List all meshes with extra material slots in the avatar stats.
 
 ### Bug Fixes
 * Fix crash when a renderer is on the avatar root.
@@ -15,6 +38,9 @@
 * Fix optimizer incorrectly assuming that avatar with no animator has 3 base layers like a generic rig when it does have 5.
 * Fix renderer not moving when using shader or NaNimation toggles with `Merge Static Meshes as Skinned` and the renderer moving via a constraint on the same game object while other meshes get merged into it.
 * Fix shader analyzer not treating `/*...*/` comment blocks as white space.
+* Fix animator optimizer unnecessarily duplicating animation clips when dealing with complex toggle creation.
+* Fix error spam when having an animator override controller in the avatar. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues/195)
+  * This is not support for them, just removing the log spam during UI rendering!
 
 ## v4.4.0
 ### Features

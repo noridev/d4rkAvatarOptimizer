@@ -235,7 +235,7 @@ namespace moe.noridev.AvatarOptimizer
             filePath = Path.GetFullPath(shaderPath);
             parsedShader.filePath = filePath;
             maxIncludes = 1000;
-            if (shaderPath.EndsWith(".orlshader"))
+            if (shaderPath.EndsWith(".orlshader") || shaderPath.EndsWith(".orlconfshader"))
             {
                 #if ORLSHADER_EXISTS
                 Profiler.StartSection("ORL.ShaderGenerator");
@@ -613,8 +613,8 @@ namespace moe.noridev.AvatarOptimizer
                             }
                             if (endCommentBlock != -1)
                             {
-                                trimmedLine = trimmedLine[..i] + " "
-                                    + rawLines[lineIndex][(endCommentBlock + 2)..].Trim(trimWhiteSpaceChars);
+                                trimmedLine = (trimmedLine[..i] + " " + rawLines[lineIndex][(endCommentBlock + 2)..])
+                                    .Trim(trimWhiteSpaceChars);
                             }
                             else
                             {
@@ -624,7 +624,8 @@ namespace moe.noridev.AvatarOptimizer
                         }
                         else
                         {
-                            trimmedLine = trimmedLine[..i] + " " + trimmedLine[(endCommentBlock + 2)..];
+                            trimmedLine = (trimmedLine[..i] + " " + trimmedLine[(endCommentBlock + 2)..])
+                                .Trim(trimWhiteSpaceChars);
                         }
                     }
                 }
@@ -1757,16 +1758,12 @@ namespace moe.noridev.AvatarOptimizer
         {
             if (source == null || !source.parsedCorrectly)
                 return null;
-            mergedMeshIndices = mergedMeshIndices ?? new List<int>();
+            using var invariantCulture = new InvariantCultureScope();
+            mergedMeshIndices ??= new();
             if (mergedMeshIndices.Count == 0)
                 mergedMeshIndices.Add(0);
             mergedMeshIndices = mergedMeshIndices.Distinct().OrderBy(i => i).ToList();
-            if (mergedMeshNames == null)
-                mergedMeshNames = Enumerable.Range(0, mergedMeshCount).Select(i => "").ToList();
-            var oldCulture = Thread.CurrentThread.CurrentCulture;
-            var oldUICulture = Thread.CurrentThread.CurrentUICulture;
-            Thread.CurrentThread.CurrentCulture = CultureInfo.InvariantCulture;
-            Thread.CurrentThread.CurrentUICulture = CultureInfo.InvariantCulture;
+            mergedMeshNames ??= Enumerable.Range(0, mergedMeshCount).Select(i => "").ToList();
             var optimizer = new ShaderOptimizer
             {
                 mergedMeshCount = mergedMeshCount,
@@ -1797,11 +1794,8 @@ namespace moe.noridev.AvatarOptimizer
                     continue;
                 if (optimizer.arrayPropertyValues.ContainsKey(staticValues.Key))
                     continue;
-                if (source.propertyTable.TryGetValue(staticValues.Key, out var prop))
-                {
-                    if (prop.doNotLock)
-                        continue;
-                }
+                if (source.propertyTable.TryGetValue(staticValues.Key, out var prop) && prop.doNotLock)
+                    continue;
                 optimizer.constantPropertyValues[staticValues.Key] = staticValues.Value;
             }
             try
@@ -1812,11 +1806,6 @@ namespace moe.noridev.AvatarOptimizer
             {
                 Debug.LogError($"Error optimizing shader {source.name}: {e.Message}\n{e.StackTrace}");
                 throw e;
-            }
-            finally
-            {
-                Thread.CurrentThread.CurrentCulture = oldCulture;
-                Thread.CurrentThread.CurrentUICulture = oldUICulture;
             }
             return optimizer.optimizedShader;
         }
@@ -2600,7 +2589,7 @@ namespace moe.noridev.AvatarOptimizer
 
         private void InjectOptimizerDefines()
         {
-            if (parsedShader.requiredConstantProperties.Count == 0)
+            if (!inlineReplaceConstants)
                 return;
             var currentKnownDefines = knownDefines.Peek();
             output.Add("#define OPTIMIZER_ENABLED 1");
@@ -2608,7 +2597,10 @@ namespace moe.noridev.AvatarOptimizer
             foreach (var prop in poiUsedPropertyDefines)
             {
                 if (!prop.Value)
+                {
+                    currentKnownDefines[prop.Key] = (false, null);
                     continue;
+                }
                 output.Add($"#define {prop.Key} 1");
                 currentKnownDefines[prop.Key] = (true, 1);
             }
@@ -2916,14 +2908,15 @@ namespace moe.noridev.AvatarOptimizer
             void SkipWhitespace(string s, ref int index) { while (index < s.Length && char.IsWhiteSpace(s[index])) index++; }
             ConditionResult EvalPreprocessorCondition(string expr, ref int index)
             {
-                // hardcoded parse of poiyomi texture prop guards as OPTIMIZER_ENABLED is also rarely used for other cases which could break when properties are not inline replaced
-                if (index == 0 && expr.Length > 44 && expr[0] == 'd' && expr[8] == 'P') {
-                    var match = Regex.Match(expr, @"defined\((PROP\w+)\) || !defined\(OPTIMIZER_ENABLED\)");
-                    if (match.Success) {
-                        if (poiUsedPropertyDefines.TryGetValue(match.Groups[1].Value, out var used))
-                            return used ? ConditionResult.True : ConditionResult.False;
-                        return ConditionResult.Unknown;
-                    }
+                // hardcoded parse of POI_PIPE == POI_XXX guard
+                if (index == 0 && expr.StartsWithSimple("POI_PIPE == POI_"))
+                {
+                    return expr["POI_PIPE == ".Length..].Trim() switch
+                    {
+                        "POI_BIRP" => ConditionResult.True,
+                        "POI_URP" => ConditionResult.False,
+                        _ => ConditionResult.Unknown,
+                    };
                 }
                 // parse flat lists of defined() and !defined() calls that are either all || or all && connected. no nesting.
                 var values = new List<ConditionResult>();
@@ -3069,41 +3062,15 @@ namespace moe.noridev.AvatarOptimizer
                 }
                 return lineIndex - startLineIndex;
             }
-            string TryPoiFurInstanceCountOptimization(ref int lineIndex)
+            if (line.StartsWithSimple("if", 1))
             {
-                if (source[lineIndex] != "#if !defined(OPTIMIZER_ENABLED)")
-                    return null;
-                if (source[lineIndex + 1] != "[instance(32)]")
-                    return null;
-                if (source[lineIndex + 2] != "#else")
-                    return null;
-                if (!source[lineIndex + 3].StartsWithSimple("[instance("))
-                    return null;
-                if (source[lineIndex + 4] != "#endif")
-                    return null;
-                int charIndex = 10;
-                var instanceCountLine = source[lineIndex + 3];
-                SkipWhitespace(instanceCountLine, ref charIndex);
-                string instanceParameter = ShaderAnalyzer.ParseIdentifierAndTrailingWhitespace(instanceCountLine, ref charIndex);
-                if (animatedPropertyValues.ContainsKey(instanceParameter) || arrayPropertyValues.ContainsKey(instanceParameter))
-                    return null;
-                if (!staticPropertyValues.TryGetValue(instanceParameter, out var instanceValue))
-                    return null;
-                lineIndex += 4;
-                return instanceCountLine.Replace(instanceParameter, instanceValue);
-            }
-            if (line.Length > 3 && line[1] == 'i' && line[2] == 'f')
-            {
-                var poiFurInstanceOptimizedLine = TryPoiFurInstanceCountOptimization(ref sourceLineIndex);
-                if (poiFurInstanceOptimizedLine != null)
-                    return poiFurInstanceOptimizedLine;
                 string expr = "";
-                if (line.Length > 6 && line[3] == 'd' && line[4] == 'e' && line[5] == 'f')
-                    expr = $"defined({line.Substring(6).TrimStart()})";
-                else if (line.Length > 7 && line[3] == 'n' && line[4] == 'd' && line[5] == 'e' && line[6] == 'f')
-                    expr = $"!defined({line.Substring(7).TrimStart()})";
+                if (line.StartsWithSimple("def", 3))
+                    expr = $"defined({line[6..].TrimStart()})";
+                else if (line.StartsWithSimple("ndef", 3))
+                    expr = $"!defined({line[7..].TrimStart()})";
                 else
-                    expr = line.Substring(4).TrimStart();
+                    expr = line[4..].TrimStart();
                 var exprIndex = 0;
                 var evalResult = EvalPreprocessorCondition(expr, ref exprIndex);
                 lastIfEvalResultStack.Push(evalResult);
@@ -3799,15 +3766,26 @@ namespace moe.noridev.AvatarOptimizer
             optimizedShader.SetName($"{sanitizedShaderName}_{shaderHash[..4]}_{shaderHash[4..12]}");
             static List<string> IndentContent(List<string> content)
             {
+                static bool StartsPreprocessorBlock(string line)
+                {
+                    return line.StartsWithSimple("#if")
+                        || line.StartsWithSimple("#ifdef")
+                        || line.StartsWithSimple("#ifndef");
+                }
+                static bool ContinuesPreprocessorBlock(string line)
+                {
+                    return line.StartsWithSimple("#elif")
+                        || line.StartsWithSimple("#else");
+                }
                 int indentLevel = 0;
                 for (int i = 0; i < content.Count; i++)
                 {
                     var line = content[i];
-                    if (line.StartsWithSimple("}"))
+                    if (line.StartsWithSimple("}") || line.StartsWithSimple("#endif") || ContinuesPreprocessorBlock(line))
                         indentLevel--;
                     indentLevel = System.Math.Max(indentLevel, 0);
                     content[i] = new string(' ', indentLevel * 4) + line;
-                    if (line.StartsWithSimple("{"))
+                    if (line.StartsWithSimple("{") || StartsPreprocessorBlock(line) || ContinuesPreprocessorBlock(line))
                         indentLevel++;
                 }
                 return content;

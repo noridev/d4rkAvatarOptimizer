@@ -67,13 +67,9 @@ namespace moe.noridev.AvatarOptimizer.Extensions
             var boneWeights1 = new List<BoneWeight1>();
             for (int i = 0; i < boneWeights.Length; i++)
             {
-                weightsPerVertex[i] = 0;
                 var w = boneWeights[i];
-                if (w.weight0 > 0)
-                {
-                    weightsPerVertex[i]++;
-                    boneWeights1.Add(new BoneWeight1() { boneIndex = w.boneIndex0, weight = w.weight0 });
-                }
+                weightsPerVertex[i] = 1;
+                boneWeights1.Add(new BoneWeight1() { boneIndex = w.boneIndex0, weight = w.weight0 });
                 if (w.weight1 > 0)
                 {
                     weightsPerVertex[i]++;
