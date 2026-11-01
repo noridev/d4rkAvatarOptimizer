@@ -1,13 +1,15 @@
 # Tips and info for advanced users
 Here I will note down more specific details on how the optimizer works and changes in workflow to use it to its fullest extent.
 
-## Tradeoffs of the Basic preset
-The Basic preset is designed to be conservative and not change behavior of your avatar.  
+## Tradeoffs of the Standard preset
+The Standard preset is designed to be conservative and not change behavior of your avatar.  
 However there are a couple things it does not consider breakage as otherwise almost no optimizations would be possible.
 1. SkinnedMeshRenderer root bone & probe anchor are ignored when merging.  
    When merging meshes it will try to pick the "best" root bone and probe anchor from the source meshes:
    - The most common root bone/probe anchor among the source meshes
    - On tie it picks in order: humanoid > some parent is a humanoid > any specified > first mesh transform
+
+   Some shaders like billboard shaders depend on the mesh root position/orientation and merging can break them. Since this is true for batching too the optimizer will stop renders from getting merged if a material on it has the DisableBatching tag set to true
 2. Worlds might animate anything on an avatar via stations. This is ignored as following this would require preserving the hierarchy as is. No deleting unused anything, no merging anything, no reordering anything. This would make the optimizer basically useless.  
    The one exception to this is MMD worlds which are supported by the `MMD Compatibility` setting.
 3. `SV_VertexID` & `SV_PrimitiveID` in shaders is not guaranteed to stay the same after optimization. Not ignoring this would require never merging any meshes/materials which would defeat the point of the optimizer.  
@@ -18,12 +20,17 @@ However there are a couple things it does not consider breakage as otherwise alm
 
 ### Automatic exclusions
 If you are a prefab creator and one of your prefabs breaks due to any of the above reasons, contact me. I have an automatic exclusion system in place and we can work to either support the prefab outright or add detection for it.  
-Currently these get automatically excluded:
+Currently these systems get automatically excluded:
 - DPS/TPS/SPS Penetrator Mesh
 - Real Kiss System Mesh
 - `_VirtualLens_Root` from Virtual Lens
 
-Additionally, the optimizer automatically excludes everything that gets animated by any animator thats not on the avatar root.  
+Additionally, `SkinnedMeshRenderer`s that share a mesh with at least one other renderer and have more vertices than the `Shared Mesh Vertex Count Exclusion Threshold` from the Avatar Optimizer Settings window (default 1024) are automatically excluded unless `Allow Mesh Data Duplication` is enabled.  
+This is because duplicated mesh data from shared meshes can massively increase the size of the avatar.  
+Only the renderers themselves are excluded, not their children.
+
+Additionally, the optimizer automatically excludes the game objects that are animated by any animator thats not on the avatar root.  
+This only excludes the specific animated objects themselves and not their children.  
 It only supports the animator controllers specified in the vrc avatar descriptor for all the animation rewriting logic.
 
 ## Log file

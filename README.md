@@ -20,7 +20,7 @@ After that you can add and update the optimizer like any other packages in your 
 
 ## Settings Recommendation
 * Your avatar is over 150k triangles or a lot of materials
-  * Use the "Basic" preset
+  * Use the "Standard" preset
   * Shader and NaNimation toggles should be avoided as merging too many meshes could cause performance regressions
 * Your avatar is under 150k triangles and a moderate amount of materials
   * Use the "Shader Toggles" preset
@@ -28,14 +28,14 @@ After that you can add and update the optimizer like any other packages in your 
     * Disable NaNimation toggles
     * Check if your avatar doesn't show anything unwanted with shaders blocked  
 In-game, open the action menu (the round one) -> Options -> Avatar -> Fallback Shaders
-  * If anything in-game looks off, fall back to the "Basic" preset
+  * If anything in-game looks off, fall back to the "Standard" preset
 
 If you want to look into more detail there is an extra document here: [For Advanced Users](./Documentation~/ForAdvancedUsers.md)  
 Also read the preset & individual option documentation below.
 
 ## Presets
-### Basic
-This preset only uses optimizations that don't affect the behavior of the avatar [(some exceptions apply)](./Documentation~/ForAdvancedUsers.md#tradeoffs-of-the-basic-preset)
+### Standard
+This preset only uses optimizations that don't affect the behavior of the avatar [(some exceptions apply)](./Documentation~/ForAdvancedUsers.md#tradeoffs-of-the-standard-preset)
 * Removes unused components, blend shapes & bones from skinned meshes
 * Bakes non animated blend shapes into the mesh
 * Merges all skinned meshes that are always animated in the same way
@@ -56,9 +56,9 @@ Expect the following behavior changes (reduced due to NaNimation toggles):
   * Some examples of this are wire frame shaders and screen space ambient occlusion
 * With blocked shaders all merged meshes that now rely on shader toggles are always visible
   * Make sure DPS/TPS penetrators don't show up! The optimizer tries to detect and exclude them from shader toggles. If it fails you need to exclude them manually
-### Full
+### Aggressive
 Some of the settings used here compromise quality of the avatar heavily when animations/shaders are blocked.  
-It has some more experimental & some behavior changing ones. Testing that your avatar still works as intended is very needed in this mode. If it doesn't switch to a lower optimization preset.
+It has some more experimental & some behavior changing ones. Testing that your avatar still works as intended is very needed in this mode. If it doesn't work correctly switch to a lower optimization preset.
 
 ## Why my Shader Pink?
 Shaders can do a lot of *weird* things, therefore the optimizer is bound to fail on some of them. Here is a couple things you could try:
@@ -66,7 +66,7 @@ Shaders can do a lot of *weird* things, therefore the optimizer is bound to fail
   * [Poiyomi Toon](https://github.com/poiyomi/PoiyomiToonShader)
   * [Silent Crosstone](https://gitlab.com/s-ilent/SCSS)
   * [ACLS](https://booth.pm/ja/items/1779615)
-* Use the "Basic" preset which causes the optimizer to not touch the shaders at all.
+* Use the "Standard" preset which causes the optimizer to not touch the shaders at all.
 * Use the "Exclusions" foldout to manually only exclude meshes from optimization that are broken.
 
 If you are a shader author you can read the [Guidelines for Shader Authors](./Documentation~/ForShaderAuthors.md) document to make your shaders compatible with the optimizer.
@@ -97,6 +97,7 @@ The optimizer tries to merge different skinned meshes together.
 This usually means meshes which always get animated in the same way will get merged.  
 Skinned meshes that are on different layers (eg UIMenu) from each other will not get merged.  
 Skinned meshes that are disabled and have no animation to turn them on will get deleted.  
+Meshes that are targeted by a material contact receiver are only merged with other meshes that are targeted by the exact same set of material contact receivers.  
 ## Use Shader Toggles
 Merges meshes even if their material properties get animated differently or if they get toggled separately from each other.  
 This will add logic to the shaders to ensure everything works correctly. Some shaders might not work correctly with this option enabled.  
@@ -127,6 +128,10 @@ This is useful to not look weird with blocked animations in case of NaNimation t
 ## Merge Static Meshes as Skinned
 Automatically converts static meshes to skinned meshes so that they can be merged with other meshes and have their materials merged as well. This only happens if the static mesh has materials that can be merged with materials from the skinned mesh it tries to get merged into.  
 Does not convert meshes on the UIMenu layer since they are mostly used for computation.
+## Allow Mesh Data Duplication
+Allows multiple Skinned Mesh Renderers that reference the same mesh asset to be optimized independently. This can duplicate mesh data in the uploaded avatar and increase download and VRAM size.
+
+When disabled, all Skinned Mesh Renderers sharing a mesh with more vertices than the global `Shared Mesh Vertex Count Exclusion Threshold` are automatically excluded from optimization. Their children are not excluded. The threshold defaults to 1024 vertices and can be changed in the Avatar Optimizer global settings.
 ## Merge Different Property Materials
 Merges materials with the same shader where properties can have different values. If they do have different values the values will get written to a constant buffer. Material IDs get written to uv.z and used to access the correct value from that cbuffer.
 
@@ -183,6 +188,8 @@ Multi toggles are layers that:
 This tries to combine layers that have a single motion time state into the direct blend tree.  
 By default it samples the original motion time at the snapping points of a radial puppet (0, 25, 50, 75, 100) and then uses those samples to approximate the motion time with a 1D blend tree.  
 The amount of sample points can be changed in the `Motion Time Approximation Sample Count` global option. Samples that don't improve the approximation by more than 1% are discarded.
+## Delete Unused Animator Parameters
+When the optimizer copies the animator controller, it keeps track of which parameters are actually used (transition conditions, blend tree parameters, state cycle offset/mirror/speed/time parameters, direct blend parameters, `VRCAnimatorPlayAudio` playback order parameters and `VRCAvatarParameterDriver` parameter names & sources) and removes all parameters that aren't used from the resulting controller.
 ## Disable Phys Bones When Unused
 Creates animation curves for all phys bone components that are used by only one SkinnedMeshRenderer. Those curves get added to the animations that animate the SkinnedMeshRenderer enabled or its game object active flag.
 ## MMD Compatibility
@@ -267,8 +274,15 @@ With the `Write Properties as Static Values` option disabled you need to make su
 Shows all meshes that the optimizer detected as DPS, TPS or SPS penetrators. If you have some that are not listed here you should add them to the exclusion list. If you don't your penetrators might get merged with other meshes which would always show them to other players if they have your shaders blocked. They might also break into triangle soup when not excluded. All the ones in the list will automatically be excluded from optimizations.
 ### Same Ratio Blend Shapes
 Shows all blend shapes that are animated in the same ratio and will get merged together. The first number of each merged group should always be 100 as that is the base value the others get compared to. In the final mesh the first blend shape will be the one the others get merged into.
+### Native Face Tracking
+Shows the native face tracking setup of the avatar descriptor. Declared blendshape names are collected from the face tracking blendshape sets and parameter behaviors. The mesh list shows all entries of the descriptor's face tracking meshes.  
+These blendshapes will not get deleted and are kept with the same name.
 ### Mesh Bone Weight Stats
 Shows how many vertices have non-zero weight for each bone weight index. Also shows maximum and medium weight per bone weight index.
+### Material Contacts
+Shows all material contact receivers with their target renderers.  
+A receiver is listed when it has its receiver type set to proximity and its write to materials flag enabled.  
+A mesh that is targeted by a material contact receiver can only merge with other meshes that are targeted by the exact same set of material contact receivers.  
 ### Phys Bone Dependencies
 For each phys bone component this shows all components that use the affected transforms of the phys bone. Also lists all animations that animate the m_Enabled property.  
 Any phys bones listed here that have exactly one skinned mesh renderer listed in its list will add an animation curve to the animations that animate the SkinnedMeshRenderer enabled or its game object active flag if the `Disable Phys Bones When Unused` option is enabled.

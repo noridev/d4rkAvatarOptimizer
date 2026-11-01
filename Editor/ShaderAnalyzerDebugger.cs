@@ -345,6 +345,11 @@ public class ShaderAnalyzerDebugger : EditorWindow
             EditorGUILayout.HelpBox(parsedShader.errorMessage, MessageType.Error);
         }
 
+        if (material != null && material.GetTag("DisableBatching", false, "false").ToLowerInvariant() == "true")
+        {
+            EditorGUILayout.HelpBox($"{material.name} has 'DisableBatching' set to 'True'.", MessageType.Warning);
+        }
+
         GUILayout.Space(5);
 
         for (int i = 0; i < parsedShader.passes.Count; i++)
@@ -419,12 +424,39 @@ public class ShaderAnalyzerDebugger : EditorWindow
         if (parsedShader.requiredConstantProperties.Count > 0)
         {
             GUILayout.Space(15);
-            var distinctRequiredConstantProperties = parsedShader.requiredConstantProperties.Distinct().ToList();
-            GUILayout.Label($"Has {distinctRequiredConstantProperties.Count} require_constant properties:");
+            var requiredConstantProperties = parsedShader.requiredConstantProperties.ToList();
+            GUILayout.Label($"Has {requiredConstantProperties.Count} require_constant properties:");
             EditorGUI.indentLevel++;
-            foreach (var requiredConstantProperty in distinctRequiredConstantProperties)
+            foreach (var propName in requiredConstantProperties)
             {
-                EditorGUILayout.LabelField(requiredConstantProperty);
+                EditorGUILayout.LabelField(propName);
+            }
+            EditorGUI.indentLevel--;
+        }
+
+        if (parsedShader.noConstantFoldingProperties.Count > 0)
+        {
+            GUILayout.Space(15);
+            var noConstantFoldingProperties = parsedShader.noConstantFoldingProperties.ToList();
+            GUILayout.Label($"Has {noConstantFoldingProperties.Count} no_constant_folding properties:");
+            EditorGUI.indentLevel++;
+            foreach (var propName in noConstantFoldingProperties)
+            {
+                EditorGUILayout.LabelField(propName);
+            }
+            EditorGUI.indentLevel--;
+        }
+
+        if (parsedShader.propertiesWithAssignmentOperator.Count > 0)
+        {
+            GUILayout.Space(15);
+            var propertiesWithAssignmentOperator = parsedShader.propertiesWithAssignmentOperator.ToList();
+            propertiesWithAssignmentOperator.Sort();
+            GUILayout.Label($"Has {propertiesWithAssignmentOperator.Count} properties which get reassigned in shader:");
+            EditorGUI.indentLevel++;
+            foreach (var propName in propertiesWithAssignmentOperator)
+            {
+                EditorGUILayout.LabelField(propName);
             }
             EditorGUI.indentLevel--;
         }

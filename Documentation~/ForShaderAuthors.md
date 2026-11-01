@@ -136,6 +136,30 @@ void geom(triangle VS_OUT input[3], inout TriangleStream<PS_IN> triStream, uint 
 }
 ```
 
+## Disabling renderer merging
+If your shader must never be merged into combined meshes by the optimizer, you can set the `DisableBatching` tag to `True` in the shader source:
+
+```
+Tags { "DisableBatching" = "True" }
+```
+
+This can be useful for billboard shaders or anything else that requires the shaders local space to not change.
+
+## Disabling constant folding for properties
+If your shader has properties that must stay as runtime uniforms and must not be baked to their material values, you can mark them with the comment `//d4rkAO:no_constant_folding(_PropertyName)`.
+
+Properties in this list are excluded from constant folding in the `ShaderOptimizer` phase:
+* Their uses in HLSL code are not inline replaced with the material value.
+* They are not emitted as `static <type> <name> = <value>;` declarations.
+* They are kept in the `Properties` block of the optimized shader instead of being stripped as locked static values.
+
+This is useful when inline replacement would break compilation or change behavior.
+
+```c
+//d4rkAO:no_constant_folding(_MyMode)
+float _MyMode;
+```
+
 ## Using Ifex conditions
 You can wrap parts of your shader in `//ifex CONDITION` and `//endex` comments to have d4rkAvatarOptimizer include or exclude those parts based on the condition. This works even outside of the HLSL code, which makes it useful for excluding entire shader passes (for example, an optional outline pass).
 
@@ -175,5 +199,22 @@ Fragment(FragmentData i, bool facing: SV_IsFrontFace)
 #endif
 {
     // [...]
+}
+```
+
+```c
+// issue is that there are two opening curly braces and only one close
+// optimizer relies on counting opening and closing curly braces to determine scope like end of function
+// fix here was to just pull the opening curly brace out of the #ifdef sections
+#ifdef VRCLV_DISABLE_SMOOTH_BOUNDS
+[branch] if (mask == 1 || isNoB) {
+#else
+[branch] if (mask == 1 || (isNoB && _UdonLightVolumeSharpBounds)) {
+#endif
+    L0  += L0_A;
+    L1r += L1r_A;
+    L1g += L1g_A;
+    L1b += L1b_A;
+    return;
 }
 ```

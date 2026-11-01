@@ -1,3 +1,78 @@
+## v4.7.0
+### Features
+* Add material contact support when merging skinned meshes.
+  * Meshes that are in different sets of material contacts don't merge with each other.
+  * Add a `Material Contacts` debug foldout listing all material contact receivers with their target renderers.
+* Support VRChat native face tracking blendshapes.
+  * Add a `Native Face Tracking` debug foldout with declared names & configured meshes.
+
+### Changes
+* Minimum supported VRChat SDK - Avatars version is now `3.10.6`
+* Improve speed of fixing animation clips.
+* Shader Optimizer:
+  * Partial preprocessor now parses most condition AST and evaluates with known values from previous `#define`.
+  * Add `//UNITY_SHADER_NO_UPGRADE` to generated .shader, .cginc & .hlsl files to improve import times.
+* Log file:
+  * List file size of generated shader assets to post optimization avatar stats.
+  * List GameObjects with multiple components of the same type in the avatar stats.
+* Add tooltips in optimizer inspector listing the affected assets to some validation info boxes and debug lists:
+  * Several of the material related validation info boxes.
+  * Crunch compressed textures and non BC5 normal maps validation.
+  * Debug foldout section for `Unlocked materials with Rename Animated` shows the marked properties.
+
+### Bug Fixes
+* Shader optimizer:
+  * Fix crash when preprocessor directive had whitespace after `#`.
+  * Fix broken shader when properties were declared as `extern`.
+  * Fix trying to merge materials with a shader that has an empty vertex like `void vertex() {}`.
+* Fix transform of skinned mesh renderer getting deleted after merge even though that transform was still used by the resulting skinned mesh as a bone. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues/207)
+* Fix materials with `DisableBatching` set to true not blocking basic renderer merging.
+  * Used to only block renderer merging with shader toggles.
+
+## v4.6.0
+### Features
+* Add new option `Delete Unused Animator Parameters`.
+* Add new shader author optimizer comment `no_constant_folding(param)` to opt properties out of constant folding.
+  * Listed params are neither inline replaced nor emitted as static property declarations.
+* Manual exclusions can now specify if they want to exclude all their children or not.
+  * Old way was always exclude all children and is still the default.
+* Add `Allow Mesh Data Duplication` and automatically exclude Skinned Mesh Renderers sharing a mesh above a configurable vertex-count threshold when it is disabled. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues/119)
+  * The global threshold defaults to 1024 vertices.
+  * Shared mesh groups and their renderer paths are listed in the avatar stats log.
+* Add error validation box when unknown component types in namespace `VRC.SDK3.` are used on the avatar.
+
+### Changes
+* Rename `Basic` preset to `Standard` and `Full` preset to `Aggressive`.
+* Optimizer inspector:
+  * Replace the Ko-fi button with an open log file button.
+  * Add a Ko-fi button to the settings window.
+  * Increase the font size of the validation info boxes by 2 points.
+* Sub animator auto exclusions no longer exclude children of the animated game objects. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/issues/191)
+* A mesh merge group can contain only one renderer with more material slots than sub meshes.
+  * It is placed last so Unity's repeated-last-sub-mesh behavior is preserved.
+  * `Body` remains unmerged when it has extra material slots and `MMD Compatibility` is on because it must be first in its merge group then.
+  * No longer bake the extra material slots as real sub meshes. [(more)](https://github.com/d4rkc0d3r/d4rkAvatarOptimizer/pull/194)
+
+### Bug Fixes
+* Shader Optimizer:
+  * Fix vertex shader return statement detection matching any line starting with `return` (e.g. `returnValue = 0;`) instead of only actual return statements.
+  * Fix `return(expr);` without a space after `return` not being handled correctly.
+  * Fix identifier parser allowing digits as the first character.
+
+## v4.5.4
+### Changes
+* No longer call `.Optimize()` on created meshes.
+
+### Bug Fixes
+* Replace colormask and cull shader lab dynamic properties with hard coded values when using `Write Properties as Static Values`.
+  * This fixes post processing SAO not working. (WTF unity???)
+* Fix SPS penetrator detection again.
+
+## v4.5.3
+### Bug Fixes
+* Fix ifex parser not handling `||` and nesting with `()`.
+  * This caused Poi 10.0.15 materials with no outlines to be black.
+
 ## v4.5.2
 ### Bug Fixes
 * Fix `.orlconfshader` not being treated as orlshader by the shader analyzer.
