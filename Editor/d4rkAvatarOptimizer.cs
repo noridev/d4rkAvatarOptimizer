@@ -1268,7 +1268,6 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
         foreach (var receiver in GetUsedComponentsInChildren<VRCContactReceiver>())
         {
             if (receiver != null &&
-                receiver.receiverType == ContactReceiver.ReceiverType.Proximity &&
                 receiver.writeToMaterials &&
                 receiver.shaderTargetRenderers != null)
                 cache_MaterialContactReceivers.Add(receiver);
@@ -1450,6 +1449,23 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
         return Mathf.Sign(scaleA.x) == Mathf.Sign(scaleB.x) && Mathf.Sign(scaleA.y) == Mathf.Sign(scaleB.y) && Mathf.Sign(scaleA.z) == Mathf.Sign(scaleB.z);
     }
 
+    private Dictionary<Transform, bool> cache_HasRenderersAsChildren = null;
+    private bool HasRenderersAsChildren(Transform t)
+    {
+        cache_HasRenderersAsChildren ??= new Dictionary<Transform, bool>();
+        if (cache_HasRenderersAsChildren.TryGetValue(t, out var cachedResult))
+            return cachedResult;
+        foreach (Transform child in t)
+        {
+            if (child.TryGetComponent<Renderer>(out var r)
+                && (r is SkinnedMeshRenderer || (r is MeshRenderer && MergeStaticMeshesAsSkinned)))
+                return cache_HasRenderersAsChildren[t] = true;
+            if (HasRenderersAsChildren(child))
+                return cache_HasRenderersAsChildren[t] = true;
+        }
+        return cache_HasRenderersAsChildren[t] = false;
+    }
+
     private string CanCombineRendererWith(List<Renderer> list, Renderer candidate)
     {
         if (!MergeSkinnedMeshes)
@@ -1457,6 +1473,8 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
         var faceTrackingError = FaceTrackingMergeError(list, candidate);
         if (faceTrackingError != null)
             return faceTrackingError;
+        if (MergeSkinnedMeshesWithNaNimation && HasRenderersAsChildren(list[0].transform))
+            return "Merge root renderer has children with renderers";
         bool candidateHasExtraMaterialSlots = HasExtraMaterialSlots(candidate);
         bool groupHasExtraMaterialSlots = list.Any(HasExtraMaterialSlots);
         if (candidateHasExtraMaterialSlots && groupHasExtraMaterialSlots)
@@ -1507,6 +1525,8 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             return null;
         if (!MergeSkinnedMeshesWithShaderToggle)
             return basicMergeError;
+        if (!MergeSkinnedMeshesWithNaNimation && HasRenderersAsChildren(list[0].transform))
+            return "Merge root renderer has children with renderers";
         var candidateShaderToggleError = IsShaderToggleCombinableRendererError(candidate);
         if (candidateShaderToggleError != null)
             return candidateShaderToggleError;
@@ -1707,23 +1727,20 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                 // ignore bindings for material properties that do not exist for any materials or material swaps on this renderer
 
                 Renderer renderer = GetTransformFromPath(binding.path)?.GetComponent<Renderer>();
-                if(renderer) {
+                if (renderer != null) {
                     int materialSlotCount = renderer.sharedMaterials.Length;
 
                     var swaps = FindAllMaterialSwapMaterials();
-                    string materialProperty = binding.propertyName.Substring("material.".Length).Split('.', 2)[0];
+                    string materialProperty = binding.propertyName["material.".Length..].Split('.', 2)[0];
 
                     bool propertyExists = false;
 
-                    for(int i = 0; i < materialSlotCount && !propertyExists; ++i) {
-                        // check the default materials
-                        if(renderer.sharedMaterials[i] != null && renderer.sharedMaterials[i].HasProperty(materialProperty)) {
+                    for (int i = 0; i < materialSlotCount && !propertyExists; ++i) {
+                        if (renderer.sharedMaterials[i] != null && renderer.sharedMaterials[i].HasProperty(materialProperty)) {
                             propertyExists = true;
                             break;
                         }
-
-                        // check the material swaps
-                        if(swaps.TryGetValue((binding.path, i), out var mats)) {
+                        if (swaps.TryGetValue((binding.path, i), out var mats)) {
                             foreach(Material mat in mats) {
                                 if(mat != null && mat.HasProperty(materialProperty)) {
                                     propertyExists = true;
@@ -1732,9 +1749,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
                             }
                         }
                     }
-
-                    // if the property does not exist, this binding is not relevant
-                    if(!propertyExists)
+                    if (!propertyExists)
                         return false;
                 }
             }
@@ -1969,9 +1984,14 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
         List<(string group, string path, string message)> mergeErrors = logMergeErrors ? new() : null;
         slotSwapMaterials = FindAllMaterialSwapMaterials();
         var renderers = GetUsedComponentsInChildren<Renderer>()
-            .Select(r => (r, hasExtraMaterialSlots: HasExtraMaterialSlots(r), slashCount: GetPathToRoot(r).Count(c => c == '/'), path: GetPathToRoot(r)))
+            .Select(r => (r, 
+                hasExtraMaterialSlots: HasExtraMaterialSlots(r),
+                slashCount: GetPathToRoot(r).Count(c => c == '/'),
+                path: GetPathToRoot(r),
+                hasRendererChildren: HasRenderersAsChildren(r.transform)))
             .OrderBy(t => t.hasExtraMaterialSlots ? 1 : 0)
             .ThenBy(t => t.path == "Body" ? 0 : 1)
+            .ThenBy(t => t.hasRendererChildren ? 1 : 0)
             .ThenBy(t => t.r == av.VisemeSkinnedMesh ? 0 : 1)
             .ThenBy(t => t.slashCount)
             .ThenBy(t => t.path)
@@ -2094,27 +2114,24 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
     private EditorCurveBinding FixAnimationBindingPath(EditorCurveBinding binding, ref bool changed)
     {
         var newBinding = binding;
-        if (transformFromOldPath.TryGetValue(newBinding.path, out var transform))
+        if (transformFromOldPath.TryGetValue(newBinding.path, out var transform) && transform != null)
         {
-            if (transform != null)
+            var path = GetPathToRoot(transform);
+            // merged meshes move all their sibling components to a new child object
+            // the general remap in transformFromOldPath points to that new child object
+            // which means transform and renderer animations should still point to the original parent object
+            // while gameobject toggles as well as other component animations should not
+            if (path.EndsWith("/d4rkAO_mergeTargetRoot") &&
+                (binding.type == typeof(Transform) || typeof(Renderer).IsAssignableFrom(binding.type)))
             {
-                var path = GetPathToRoot(transform);
-                // merged meshes move all their sibling components to a new child object
-                // the general remap in transformFromOldPath points to that new child object
-                // which means transform and renderer animations should still point to the original parent object
-                // while gameobject toggles as well as other component animations should not
-                if (path.EndsWith("/d4rkAO_mergeTargetRoot") &&
-                    (binding.type == typeof(Transform) || typeof(Renderer).IsAssignableFrom(binding.type)))
-                {
-                    path = path.Substring(0, path.Length - "/d4rkAO_mergeTargetRoot".Length);
-                }
-                changed = changed || path != newBinding.path;
-                newBinding.path = path;
-                if (binding.type == typeof(MeshRenderer) && !transform.TryGetComponent(out MeshRenderer renderer))
-                {
-                    newBinding.type = typeof(SkinnedMeshRenderer);
-                    changed = true;
-                }
+                path = path[..^"/d4rkAO_mergeTargetRoot".Length];
+            }
+            changed = changed || path != newBinding.path;
+            newBinding.path = path;
+            if (binding.type == typeof(MeshRenderer) && !transform.TryGetComponent(out MeshRenderer renderer))
+            {
+                newBinding.type = typeof(SkinnedMeshRenderer);
+                changed = true;
             }
         }
         return newBinding;
@@ -4487,8 +4504,11 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             }
         }
 
-        var animators = GetNonEditorOnlyComponentsInChildren<Animator>();
-        foreach (var animator in animators)
+        var unusedComponents = FindAllUnusedComponents();
+        var components = GetNonEditorOnlyComponentsInChildren<Component>()
+            .Where(c => c != null && c.GetType() != typeof(Transform) && !unusedComponents.Contains(c)).ToList();
+
+        foreach (var animator in components.OfType<Animator>())
         {
             if (animator == null || animator.avatar == null || !animator.avatar.isHuman)
                 continue;
@@ -4500,17 +4520,13 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             }
         }
 
-        var alwaysDisabledComponents = FindAllUnusedComponents();
-        foreach (var raycast in GetNonEditorOnlyComponentsInChildren<VRCRaycast>()
-            .Where(rc => rc != null && !alwaysDisabledComponents.Contains(rc)))
+        foreach (var raycast in components.OfType<VRCRaycast>())
         {
             if (raycast.ResultTransform != null)
                 transforms.Add(raycast.ResultTransform);
         }
 
-        var physBones = GetNonEditorOnlyComponentsInChildren<VRCPhysBoneBase>()
-            .Where(pb => pb != null && !alwaysDisabledComponents.Contains(pb)).ToList();
-        foreach (var physBone in physBones)
+        foreach (var physBone in components.OfType<VRCPhysBoneBase>())
         {
             var root = physBone.GetRootTransform();
             var exclusions = new HashSet<Transform>(physBone.ignoreTransforms);
@@ -4529,8 +4545,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             }
         }
 
-        var behaviours = GetNonEditorOnlyComponentsInChildren<Behaviour>()
-            .Where(b => b != null && !alwaysDisabledComponents.Contains(b)).ToList();
+        var behaviours = components.OfType<Behaviour>().ToList();
         var constraints = behaviours.Where(b => b.GetType().Name.Contains("Constraint")).ToList();
         foreach (var constraint in constraints)
         {
@@ -4556,7 +4571,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
             transforms.UnionWith(FindReferencedTransforms(finalIKScript));
         }
 
-        foreach (var headChop in GetNonEditorOnlyComponentsInChildren<VRCHeadChop>())
+        foreach (var headChop in components.OfType<VRCHeadChop>())
         {
             foreach (var targetBone in headChop.targetBones)
             {
@@ -4569,8 +4584,7 @@ public class d4rkAvatarOptimizer : MonoBehaviour, VRC.SDKBase.IEditorOnly
 
         transforms.UnionWith(avDescriptor.transform.GetAllDescendants().Where(t => t.localScale != Vector3.one));
 
-        transforms.UnionWith(GetNonEditorOnlyComponentsInChildren<Rigidbody>()
-            .Where(rb => rb != null && !alwaysDisabledComponents.Contains(rb)).Select(rb => rb.transform));
+        transforms.UnionWith(components.OfType<Rigidbody>().Select(rb => rb.transform));
 
         return cache_FindAllMovingTransforms = transforms;
     }
